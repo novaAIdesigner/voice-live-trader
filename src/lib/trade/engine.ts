@@ -25,7 +25,7 @@ type EngineState = {
   balances: Record<CurrencyCode, BalanceState>;
   assets: Map<string, AssetPosition>; // key = productType|symbol|currency
   orders: Map<string, OrderRecord>;
-  fillTimers: Map<string, NodeJS.Timeout>;
+  fillTimers: Map<string, ReturnType<typeof setTimeout>>;
 };
 
 function nowIso() {

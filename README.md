@@ -6,6 +6,13 @@
 - Chat 窗口（文本 + 可选麦克风语音）
 - 交易表单（提交到后台 API）
 
+## GitHub Pages 部署
+
+本项目已配置为静态导出并通过 GitHub Actions 发布到 GitHub Pages（见 `.github/workflows/deploy.yml`）。
+
+注意：GitHub Pages 是静态托管，无法运行 Next.js 的 `/api/*` 路由。
+因此在 `github.io` 域名下运行时，页面会自动切换为“前端内存撮合引擎”以保证演示可用。
+
 ## 运行
 
 ```powershell

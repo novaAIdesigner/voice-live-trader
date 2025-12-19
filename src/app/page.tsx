@@ -31,6 +31,14 @@ import type {
   TradeOrderRequest,
   TradeOrderResponse,
 } from "@/lib/trade/types";
+import {
+  adjustBalance as simAdjustBalance,
+  cancelOrder as simCancelOrder,
+  convertCurrency as simConvertCurrency,
+  getAccountSnapshot as simGetAccountSnapshot,
+  modifyOrder as simModifyOrder,
+  placeOrder as simPlaceOrder,
+} from "@/lib/trade/engine";
 import { VoiceLiveClient } from "@/lib/voiceLive/VoiceLiveClient";
 import type { UsageTotals, VoiceLiveConnectionConfig, WireStats } from "@/lib/voiceLive/types";
 import { deleteCookie, getCookie, setCookie } from "@/lib/cookies";
@@ -135,7 +143,16 @@ function chatTs() {
   });
 }
 
+function isGitHubPagesRuntime() {
+  return typeof window !== "undefined" && window.location.hostname.endsWith("github.io");
+}
+
 async function postTrade(order: TradeOrderRequest): Promise<TradeOrderResponse> {
+  if (isGitHubPagesRuntime()) {
+    const res = simPlaceOrder(order);
+    if (res.status === "rejected") throw new Error(res.summary || "Order rejected");
+    return res;
+  }
   const res = await fetch("/api/trade", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -147,6 +164,9 @@ async function postTrade(order: TradeOrderRequest): Promise<TradeOrderResponse> 
 }
 
 async function fetchAccount(): Promise<AccountSnapshot> {
+  if (isGitHubPagesRuntime()) {
+    return simGetAccountSnapshot();
+  }
   const res = await fetch("/api/account", { method: "GET" });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json?.error ?? "Account API error");
@@ -154,6 +174,9 @@ async function fetchAccount(): Promise<AccountSnapshot> {
 }
 
 async function postFxConvert(req: FxConvertRequest): Promise<FxConvertResponse> {
+  if (isGitHubPagesRuntime()) {
+    return simConvertCurrency(req);
+  }
   const res = await fetch("/api/fx", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -164,6 +187,9 @@ async function postFxConvert(req: FxConvertRequest): Promise<FxConvertResponse> 
 }
 
 async function postBalanceAdjust(req: BalanceAdjustRequest): Promise<BalanceAdjustResponse> {
+  if (isGitHubPagesRuntime()) {
+    return simAdjustBalance(req);
+  }
   const res = await fetch("/api/balance", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -174,6 +200,11 @@ async function postBalanceAdjust(req: BalanceAdjustRequest): Promise<BalanceAdju
 }
 
 async function postCancel(orderId: string) {
+  if (isGitHubPagesRuntime()) {
+    const res = simCancelOrder(orderId);
+    if (!res.ok) throw new Error(res.error ?? "Cancel failed");
+    return { snapshot: res.snapshot } as { snapshot?: AccountSnapshot };
+  }
   const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST" });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json?.error ?? "Cancel failed");
@@ -181,6 +212,11 @@ async function postCancel(orderId: string) {
 }
 
 async function postModify(orderId: string, patch: ModifyOrderRequest) {
+  if (isGitHubPagesRuntime()) {
+    const res = simModifyOrder(orderId, patch);
+    if (!res.ok) throw new Error(res.error ?? "Modify failed");
+    return { snapshot: res.snapshot } as { snapshot?: AccountSnapshot };
+  }
   const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/modify`, {
     method: "POST",
     headers: { "content-type": "application/json" },

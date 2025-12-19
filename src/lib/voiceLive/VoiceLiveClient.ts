@@ -150,6 +150,9 @@ export class VoiceLiveClient {
   private responseApiDone = true;
   private bargeInCancelSent = false;
 
+  private responseCreateInFlight = false;
+  private pendingResponseCreate = false;
+
   private callbacks: VoiceLiveCallbacks;
   private tools: VoiceLiveTool[];
   private functionHandler: FunctionCallHandler;
@@ -217,6 +220,21 @@ export class VoiceLiveClient {
     this.emitStats();
   }
 
+  private requestResponseCreate() {
+    if (this.responseActive || this.responseCreateInFlight) {
+      this.pendingResponseCreate = true;
+      return;
+    }
+
+    this.responseCreateInFlight = true;
+    try {
+      this.send({ type: "response.create" });
+    } catch (e) {
+      this.responseCreateInFlight = false;
+      throw e;
+    }
+  }
+
   async connect(config: VoiceLiveConnectionConfig) {
     if (this.ws) this.disconnect();
 
@@ -238,6 +256,8 @@ export class VoiceLiveClient {
     this.responseActive = false;
     this.responseApiDone = true;
     this.bargeInCancelSent = false;
+    this.responseCreateInFlight = false;
+    this.pendingResponseCreate = false;
 
     this.speechEndAtMs = null;
     this.waitingFirstResponse = false;
@@ -362,6 +382,7 @@ export class VoiceLiveClient {
         this.responseActive = true;
         this.responseApiDone = false;
         this.bargeInCancelSent = false;
+        this.responseCreateInFlight = false;
         this.assistantTextBuffer = "";
         this.assistantTextDoneEmitted = false;
         markFirstResponse();
@@ -371,6 +392,15 @@ export class VoiceLiveClient {
         this.responseActive = false;
         this.responseApiDone = true;
         this.bargeInCancelSent = false;
+
+        if (this.pendingResponseCreate) {
+          this.pendingResponseCreate = false;
+          try {
+            this.requestResponseCreate();
+          } catch {
+            // ignore
+          }
+        }
       }
 
       if (type === "input_audio_buffer.speech_stopped" || type === "input_audio_buffer_speech_stopped") {
@@ -546,7 +576,7 @@ export class VoiceLiveClient {
             });
 
             // Let the model finish the response using the tool output.
-            this.send({ type: "response.create" });
+            this.requestResponseCreate();
           } catch (e) {
             const message = e instanceof Error ? e.message : String(e);
             this.send({
@@ -558,7 +588,7 @@ export class VoiceLiveClient {
                 output: JSON.stringify({ error: message }),
               },
             });
-            this.send({ type: "response.create" });
+            this.requestResponseCreate();
           } finally {
             this.pendingFunctionCallsById.delete(callId);
           }
@@ -635,6 +665,8 @@ export class VoiceLiveClient {
     } finally {
       this.ws = null;
       this.setStatus("disconnected");
+      this.responseCreateInFlight = false;
+      this.pendingResponseCreate = false;
     }
   }
 
@@ -652,7 +684,7 @@ export class VoiceLiveClient {
     });
 
     // For text input, explicitly request a response.
-    this.send({ type: "response.create" });
+    this.requestResponseCreate();
   }
 
   async startMicrophone() {

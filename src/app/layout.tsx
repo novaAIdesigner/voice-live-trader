@@ -16,18 +16,8 @@ export const metadata: Metadata = {
   title: "Azure Voice Live - Trader Agent",
   description: "Azure Voice Live trader agent web app",
   icons: {
-    icon: [
-      {
-        url: "https://devblogs.microsoft.com/foundry/wp-content/uploads/sites/89/2025/03/ai-foundry.png",
-        type: "image/png",
-      },
-    ],
-    apple: [
-      {
-        url: "https://devblogs.microsoft.com/foundry/wp-content/uploads/sites/89/2025/03/ai-foundry.png",
-        type: "image/png",
-      },
-    ],
+    icon: [{ url: "vite.svg", type: "image/svg+xml" }],
+    shortcut: ["vite.svg"],
   },
 };
 
