@@ -10,7 +10,7 @@ type Props = {
 };
 
 const DISPLAY_CCYS: Array<"USD" | "JPY" | "CNY"> = ["USD", "JPY", "CNY"];
-const CONVERT_CCYS: CurrencyCode[] = ["USD", "JPY", "CNY", "BTC", "ETH", "USDT", "USDC"];
+const CONVERT_CCYS: CurrencyCode[] = ["USD", "JPY", "CNY"];
 
 export function AccountPanel({ balances, onConvert, onAdjust }: Props) {
   const [from, setFrom] = useState<CurrencyCode>("USD");
@@ -104,7 +104,7 @@ export function AccountPanel({ balances, onConvert, onAdjust }: Props) {
       <div className="mt-3 grid gap-2">
         <details className="rounded-md border border-black/10 dark:border-white/15">
           <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-zinc-900 dark:text-zinc-100">
-            换汇 / 换币
+            换汇
           </summary>
           <div className="grid gap-2 border-t border-black/10 p-3 dark:border-white/15">
             <select

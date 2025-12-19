@@ -10,6 +10,7 @@ import { UsagePanel } from "@/components/UsagePanel";
 import {
   cancelOrderTool,
   convertCurrencyTool,
+  getMarketPriceTool,
   getAccountSnapshotTool,
   modifyOrderTool,
   placeBondOrderTool,
@@ -36,8 +37,10 @@ import {
   cancelOrder as simCancelOrder,
   convertCurrency as simConvertCurrency,
   getAccountSnapshot as simGetAccountSnapshot,
+  getMarketPrice as simGetMarketPrice,
   modifyOrder as simModifyOrder,
   placeOrder as simPlaceOrder,
+  subscribeAccountSnapshot,
 } from "@/lib/trade/engine";
 import { VoiceLiveClient } from "@/lib/voiceLive/VoiceLiveClient";
 import type { UsageTotals, VoiceLiveConnectionConfig, WireStats } from "@/lib/voiceLive/types";
@@ -148,83 +151,33 @@ function isGitHubPagesRuntime() {
 }
 
 async function postTrade(order: TradeOrderRequest): Promise<TradeOrderResponse> {
-  if (isGitHubPagesRuntime()) {
-    const res = simPlaceOrder(order);
-    if (res.status === "rejected") throw new Error(res.summary || "Order rejected");
-    return res;
-  }
-  const res = await fetch("/api/trade", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(order),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error ?? "Trade API error");
-  return json as TradeOrderResponse;
+  const res = simPlaceOrder(order);
+  if (res.status === "rejected") throw new Error(res.summary || "Order rejected");
+  return res;
 }
 
 async function fetchAccount(): Promise<AccountSnapshot> {
-  if (isGitHubPagesRuntime()) {
-    return simGetAccountSnapshot();
-  }
-  const res = await fetch("/api/account", { method: "GET" });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error ?? "Account API error");
-  return json as AccountSnapshot;
+  return simGetAccountSnapshot();
 }
 
 async function postFxConvert(req: FxConvertRequest): Promise<FxConvertResponse> {
-  if (isGitHubPagesRuntime()) {
-    return simConvertCurrency(req);
-  }
-  const res = await fetch("/api/fx", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  const json = await res.json().catch(() => ({}));
-  return json as FxConvertResponse;
+  return simConvertCurrency(req);
 }
 
 async function postBalanceAdjust(req: BalanceAdjustRequest): Promise<BalanceAdjustResponse> {
-  if (isGitHubPagesRuntime()) {
-    return simAdjustBalance(req);
-  }
-  const res = await fetch("/api/balance", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  const json = await res.json().catch(() => ({}));
-  return json as BalanceAdjustResponse;
+  return simAdjustBalance(req);
 }
 
 async function postCancel(orderId: string) {
-  if (isGitHubPagesRuntime()) {
-    const res = simCancelOrder(orderId);
-    if (!res.ok) throw new Error(res.error ?? "Cancel failed");
-    return { snapshot: res.snapshot } as { snapshot?: AccountSnapshot };
-  }
-  const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST" });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error ?? "Cancel failed");
-  return json as { snapshot?: AccountSnapshot };
+  const res = simCancelOrder(orderId);
+  if (!res.ok) throw new Error(res.error ?? "Cancel failed");
+  return { snapshot: res.snapshot } as { snapshot?: AccountSnapshot };
 }
 
 async function postModify(orderId: string, patch: ModifyOrderRequest) {
-  if (isGitHubPagesRuntime()) {
-    const res = simModifyOrder(orderId, patch);
-    if (!res.ok) throw new Error(res.error ?? "Modify failed");
-    return { snapshot: res.snapshot } as { snapshot?: AccountSnapshot };
-  }
-  const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/modify`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error ?? "Modify failed");
-  return json as { snapshot?: AccountSnapshot };
+  const res = simModifyOrder(orderId, patch);
+  if (!res.ok) throw new Error(res.error ?? "Modify failed");
+  return { snapshot: res.snapshot } as { snapshot?: AccountSnapshot };
 }
 
 export default function Home() {
@@ -278,65 +231,57 @@ export default function Home() {
   useEffect(() => {
     let alive = true;
 
-    const refresh = async () => {
-      try {
-        const snap = await fetchAccount();
-        if (!alive) return;
-        setAccount(snap);
+    const unsubscribe = subscribeAccountSnapshot((snap) => {
+      if (!alive) return;
+      setAccount(snap);
 
-        setTickets((prev) => {
-          if (!snap.orders?.length) return prev;
-          const byId = new Map(snap.orders.map((o) => [o.orderId, o] as const));
-          const changedIds: string[] = [];
-          const next = prev.map((t) => {
-            const last = t.lastResponse;
-            const orderId = last?.orderId;
-            if (!t.frozen || !orderId || !last) return t;
-            const rec = byId.get(orderId);
-            if (!rec) return t;
+      setTickets((prev) => {
+        if (!snap.orders?.length) return prev;
+        const byId = new Map(snap.orders.map((o) => [o.orderId, o] as const));
+        const changedIds: string[] = [];
+        const next = prev.map((t) => {
+          const last = t.lastResponse;
+          const orderId = last?.orderId;
+          if (!t.frozen || !orderId || !last) return t;
+          const rec = byId.get(orderId);
+          if (!rec) return t;
 
-            const prevStatus = last.status;
-            if (rec.status === prevStatus) return t;
+          const prevStatus = last.status;
+          if (rec.status === prevStatus) return t;
 
-            changedIds.push(t.id);
-            const summary =
-              rec.status === "filled"
-                ? `订单 ${rec.orderId} 已成交：${rec.side === "buy" ? "买入" : "卖出"} ${rec.quantity} ${rec.symbol}`
-                : rec.status === "canceled"
-                  ? `订单 ${rec.orderId} 已取消：${rec.side === "buy" ? "买入" : "卖出"} ${rec.quantity} ${rec.symbol}`
-                  : rec.status === "rejected"
-                    ? `订单 ${rec.orderId} 已拒绝：${rec.side === "buy" ? "买入" : "卖出"} ${rec.quantity} ${rec.symbol}`
-                    : last.summary;
+          changedIds.push(t.id);
+          const summary =
+            rec.status === "filled"
+              ? `订单 ${rec.orderId} 已成交：${rec.side === "buy" ? "买入" : "卖出"} ${rec.quantity} ${rec.symbol}`
+              : rec.status === "canceled"
+                ? `订单 ${rec.orderId} 已取消：${rec.side === "buy" ? "买入" : "卖出"} ${rec.quantity} ${rec.symbol}`
+                : rec.status === "rejected"
+                  ? `订单 ${rec.orderId} 已拒绝：${rec.side === "buy" ? "买入" : "卖出"} ${rec.quantity} ${rec.symbol}`
+                  : last.summary;
 
-            return {
-              ...t,
-              lastResponse: {
-                ...last,
-                status: rec.status,
-                summary,
-                filledAt: rec.filledAt,
-                fillPrice: rec.fillPrice,
-                fillValue: rec.fillValue,
-              },
-            };
-          });
-
-          if (!changedIds.length) return prev;
-          const bumped = next.filter((t) => changedIds.includes(t.id));
-          const rest = next.filter((t) => !changedIds.includes(t.id));
-          return [...bumped, ...rest];
+          return {
+            ...t,
+            lastResponse: {
+              ...last,
+              status: rec.status,
+              summary,
+              filledAt: rec.filledAt,
+              fillPrice: rec.fillPrice,
+              fillValue: rec.fillValue,
+            },
+          };
         });
-      } catch {
-        // ignore
-      }
-    };
 
-    void refresh();
-    const id = setInterval(() => void refresh(), 3000);
+        if (!changedIds.length) return prev;
+        const bumped = next.filter((t) => changedIds.includes(t.id));
+        const rest = next.filter((t) => !changedIds.includes(t.id));
+        return [...bumped, ...rest];
+      });
+    });
 
     return () => {
       alive = false;
-      clearInterval(id);
+      unsubscribe();
     };
   }, []);
 
@@ -366,28 +311,7 @@ export default function Home() {
     else deleteCookie(API_KEY_COOKIE);
   }, [config.apiKey]);
 
-  const assetsForPanel: AssetPosition[] = useMemo(() => {
-    const base: AssetPosition[] = account?.assets ?? [];
-    const balances = account?.balances ?? [];
-
-    const crypto = balances
-      .filter((b) => b.currency === "BTC" || b.currency === "ETH" || b.currency === "USDT" || b.currency === "USDC")
-      .filter((b) => (b.available ?? 0) > 0 || (b.reserved ?? 0) > 0)
-      .map((b) => {
-        const qty = (b.available ?? 0) + (b.reserved ?? 0);
-        return {
-          id: `pos_crypto_${b.currency}`,
-          productType: "crypto" as const,
-          symbol: b.currency,
-          currency: b.currency,
-          quantity: qty,
-          avgCost: 0,
-          updatedAt: account?.asOf ?? new Date().toISOString(),
-        } satisfies AssetPosition;
-      });
-
-    return [...crypto, ...base];
-  }, [account]);
+  const assetsForPanel: AssetPosition[] = useMemo(() => account?.assets ?? [], [account]);
 
   const connectDisabled = useMemo(() => {
     return !config.resourceHost || !config.apiVersion || !config.model || !config.apiKey;
@@ -416,6 +340,7 @@ export default function Home() {
         placeOptionOrderTool,
         placeCryptoOrderTool,
         getAccountSnapshotTool,
+        getMarketPriceTool,
         convertCurrencyTool,
         cancelOrderTool,
         modifyOrderTool,
@@ -542,6 +467,54 @@ export default function Home() {
           }
         }
 
+        if (name === "get_market_price") {
+          let argsUnknown: unknown;
+          try {
+            argsUnknown = JSON.parse(argumentsJson);
+          } catch {
+            const output = JSON.stringify({ error: "Invalid JSON arguments" });
+            logSystem(`↳ output: ${output}`);
+            return { output };
+          }
+
+          const r = argsUnknown && typeof argsUnknown === "object" ? (argsUnknown as Record<string, unknown>) : null;
+          const productType = r?.productType;
+          const symbol = typeof r?.symbol === "string" ? r.symbol : "";
+          const currency = r?.currency;
+
+          const isProductType = (v: unknown) =>
+            v === "stock" || v === "fund" || v === "bond" || v === "option" || v === "crypto";
+          const isFiat = (v: unknown) => v === "USD" || v === "JPY" || v === "CNY";
+
+          if (!isProductType(productType)) {
+            const output = JSON.stringify({ error: "productType must be stock|fund|bond|option|crypto" });
+            logSystem(`↳ output: ${output}`);
+            return { output };
+          }
+
+          if (!symbol.trim()) {
+            const output = JSON.stringify({ error: "symbol is required" });
+            logSystem(`↳ output: ${output}`);
+            return { output };
+          }
+
+          if (currency !== undefined && !isFiat(currency)) {
+            const output = JSON.stringify({ error: "currency must be USD|JPY|CNY" });
+            logSystem(`↳ output: ${output}`);
+            return { output };
+          }
+
+          const res = simGetMarketPrice({
+            productType,
+            symbol,
+            currency: currency as "USD" | "JPY" | "CNY" | undefined,
+          });
+
+          const output = JSON.stringify(res);
+          logSystem(`↳ output: ${output}`);
+          return { output };
+        }
+
         if (name === "convert_currency") {
           let argsUnknown: unknown;
           try {
@@ -557,11 +530,10 @@ export default function Home() {
           const to = r?.to;
           const amount = r?.amount;
 
-          const isCcy = (v: unknown) =>
-            v === "USD" || v === "JPY" || v === "CNY" || v === "BTC" || v === "ETH" || v === "USDT" || v === "USDC";
+          const isFiat = (v: unknown) => v === "USD" || v === "JPY" || v === "CNY";
 
-          if (!isCcy(from) || !isCcy(to)) {
-            const output = JSON.stringify({ error: "from/to must be USD|JPY|CNY|BTC|ETH|USDT|USDC" });
+          if (!isFiat(from) || !isFiat(to)) {
+            const output = JSON.stringify({ error: "from/to must be USD|JPY|CNY" });
             logSystem(`↳ output: ${output}`);
             return { output };
           }
@@ -874,14 +846,7 @@ export default function Home() {
       const trade = await postTrade(payload);
 
       setMessages((prev) => [...prev, { id: newId("s"), role: "system", text: trade.summary, ts: chatTs() }]);
-      setTickets((prev) => {
-        const updated = prev.map((x) =>
-          x.id === ticketId ? { ...x, order: payload, frozen: true, collapsed: true, lastResponse: trade } : x
-        );
-        const bumped = updated.find((x) => x.id === ticketId);
-        if (!bumped) return updated;
-        return [bumped, ...updated.filter((x) => x.id !== ticketId)];
-      });
+      setTickets((prev) => prev.filter((x) => x.id !== ticketId));
 
       void fetchAccount()
         .then((snap) => setAccount(snap))

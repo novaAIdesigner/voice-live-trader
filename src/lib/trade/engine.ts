@@ -28,6 +28,13 @@ type EngineState = {
   fillTimers: Map<string, ReturnType<typeof setTimeout>>;
 };
 
+type PersistedStateV1 = {
+  v: 1;
+  balances: Partial<Record<CurrencyCode, BalanceState>>;
+  assets: AssetPosition[];
+  orders: OrderRecord[];
+};
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -87,6 +94,27 @@ function marketPrice(productType: TradeProductType, symbol: string, currency: Cu
   const base = 10 + 490 * hashTo01(`${productType}:${symbol.toUpperCase()}`);
   const fx = fxRate("USD", currency);
   return round2(base * fx);
+}
+
+export function getMarketPrice(args: {
+  productType: TradeProductType;
+  symbol: string;
+  currency?: CurrencyCode;
+}): { ok: boolean; price?: number; currency: CurrencyCode; productType: TradeProductType; symbol: string; error?: string } {
+  const productType = args.productType;
+  const symbol = args.symbol.trim();
+  const currency = (args.currency ?? "USD") as CurrencyCode;
+
+  if (!symbol) {
+    return { ok: false, currency, productType, symbol: "", error: "symbol is required" };
+  }
+
+  const px = marketPrice(productType, symbol, currency);
+  if (!Number.isFinite(px) || px <= 0) {
+    return { ok: false, currency, productType, symbol, error: "price unavailable" };
+  }
+
+  return { ok: true, price: px, currency, productType, symbol };
 }
 
 function fxRate(from: CurrencyCode, to: CurrencyCode): number {
@@ -197,8 +225,145 @@ function createInitialState(): EngineState {
 
 let STATE: EngineState | null = null;
 
+const STORAGE_KEY = "vlt_engine_state_v1";
+const listeners = new Set<(snap: AccountSnapshot) => void>();
+
+function canUseLocalStorage() {
+  try {
+    return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+  } catch {
+    return false;
+  }
+}
+
+function persistState(s0?: EngineState) {
+  if (!canUseLocalStorage()) return;
+
+  try {
+    const s = s0 ?? state();
+    const payload: PersistedStateV1 = {
+      v: 1,
+      balances: s.balances,
+      assets: Array.from(s.assets.values()).map((p) => ({ ...p })),
+      orders: Array.from(s.orders.values()).map((o) => ({ ...o })),
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // ignore
+  }
+}
+
+function loadStateFromStorage(): EngineState | null {
+  if (!canUseLocalStorage()) return null;
+
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedStateV1;
+    if (!parsed || typeof parsed !== "object" || parsed.v !== 1) return null;
+
+    const base = createInitialState();
+
+    // Rehydrate balances (ensure all keys exist).
+    for (const ccy of Object.keys(base.balances) as CurrencyCode[]) {
+      const b = parsed.balances?.[ccy];
+      if (!b || typeof b !== "object") continue;
+      if (typeof b.available === "number" && Number.isFinite(b.available)) base.balances[ccy].available = b.available;
+      if (typeof b.reserved === "number" && Number.isFinite(b.reserved)) base.balances[ccy].reserved = b.reserved;
+    }
+
+    // Rehydrate assets
+    base.assets = new Map();
+    if (Array.isArray(parsed.assets)) {
+      for (const p of parsed.assets) {
+        if (!p || typeof p !== "object") continue;
+        const productType = (p as AssetPosition).productType;
+        const symbol = (p as AssetPosition).symbol;
+        const currency = (p as AssetPosition).currency;
+        if (!productType || !symbol || !currency) continue;
+        base.assets.set(assetKey(productType, symbol, currency), { ...(p as AssetPosition) });
+      }
+    }
+
+    // Rehydrate orders
+    base.orders = new Map();
+    if (Array.isArray(parsed.orders)) {
+      for (const o of parsed.orders) {
+        if (!o || typeof o !== "object") continue;
+        const orderId = (o as OrderRecord).orderId;
+        if (!orderId || typeof orderId !== "string") continue;
+        base.orders.set(orderId, { ...(o as OrderRecord) });
+      }
+    }
+
+    base.fillTimers = new Map();
+    return base;
+  } catch {
+    return null;
+  }
+}
+
+function notify(snap: AccountSnapshot) {
+  if (!listeners.size) return;
+  for (const l of listeners) {
+    try {
+      l(snap);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function persistAndNotify() {
+  const snap = snapshot();
+  persistState();
+  notify(snap);
+  return snap;
+}
+
+function scheduleFillIfNeeded(orderId: string) {
+  const s = state();
+  if (s.fillTimers.has(orderId)) return;
+  const o = s.orders.get(orderId);
+  if (!o || o.status !== "pending" || o.orderType !== "limit") return;
+  const limitPx = o.limitPrice ?? 0;
+  if (!Number.isFinite(limitPx) || limitPx <= 0) return;
+
+  const delayMs = Math.floor(60_000 + hashTo01(orderId) * 240_000); // 1-5 minutes
+  const timer = setTimeout(() => {
+    try {
+      applyFill(orderId, round2(limitPx));
+      persistAndNotify();
+    } catch {
+      // ignore
+    }
+  }, delayMs);
+  s.fillTimers.set(orderId, timer);
+}
+
+export function subscribeAccountSnapshot(listener: (snap: AccountSnapshot) => void) {
+  listeners.add(listener);
+  try {
+    listener(snapshot());
+  } catch {
+    // ignore
+  }
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
 function state(): EngineState {
-  if (!STATE) STATE = createInitialState();
+  if (!STATE) {
+    const loaded = loadStateFromStorage();
+    STATE = loaded ?? createInitialState();
+    // Persist the initial seed so the account stays stable across reloads.
+    if (!loaded) persistState(STATE);
+    // Re-schedule any pending limit-order fills after reload.
+    for (const o of STATE.orders.values()) {
+      if (o.status === "pending" && o.orderType === "limit") scheduleFillIfNeeded(o.orderId);
+    }
+  }
   return STATE;
 }
 
@@ -206,7 +371,9 @@ function snapshot(): AccountSnapshot {
   const s = state();
   const asOf = nowIso();
 
-  const balances = (Object.keys(s.balances) as CurrencyCode[]).map((ccy) => {
+  // Balances are cash only (fiat). Crypto is exposed as assets/positions.
+  const cashCcys: Array<"USD" | "JPY" | "CNY"> = ["USD", "JPY", "CNY"];
+  const balances = cashCcys.map((ccy) => {
     const b = s.balances[ccy];
     const available = roundByCcy(ccy, clampFinite(b.available));
     const reserved = roundByCcy(ccy, clampFinite(b.reserved));
@@ -214,6 +381,22 @@ function snapshot(): AccountSnapshot {
   });
 
   const assets = Array.from(s.assets.values()).map((p) => ({ ...p }));
+
+  const cryptoCcys: CurrencyCode[] = ["BTC", "ETH", "USDT", "USDC"];
+  for (const c of cryptoCcys) {
+    const b = s.balances[c];
+    const qty = roundByCcy(c, clampFinite(b.available) + clampFinite(b.reserved));
+    if (qty <= 0) continue;
+    assets.unshift({
+      id: `pos_crypto_${c}`,
+      productType: "crypto",
+      symbol: c,
+      currency: c,
+      quantity: qty,
+      avgCost: 0,
+      updatedAt: asOf,
+    });
+  }
   const orders = Array.from(s.orders.values())
     .map((o) => ({ ...o }))
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -435,17 +618,30 @@ export function adjustBalance(req: BalanceAdjustRequest): BalanceAdjustResponse 
       return { ok: false, asOf, error: "Insufficient funds", snapshot: snapshot() };
     }
     bal.available = round2(bal.available - withdraw);
-    return { ok: true, asOf, snapshot: snapshot() };
+    const snap = snapshot();
+    persistState();
+    notify(snap);
+    return { ok: true, asOf, snapshot: snap };
   }
 
   // deposit
   bal.available = round2(bal.available + amount);
-  return { ok: true, asOf, snapshot: snapshot() };
+  const snap = snapshot();
+  persistState();
+  notify(snap);
+  return { ok: true, asOf, snapshot: snap };
 }
 
 export function convertCurrency(req: FxConvertRequest): FxConvertResponse {
   const s = state();
   const asOf = nowIso();
+
+  if (
+    (req.from !== "USD" && req.from !== "JPY" && req.from !== "CNY") ||
+    (req.to !== "USD" && req.to !== "JPY" && req.to !== "CNY")
+  ) {
+    return { ok: false, asOf, error: "Only USD/JPY/CNY are supported for FX conversion", snapshot: snapshot() };
+  }
 
   const amount = roundByCcy(req.from, req.amount);
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -467,7 +663,10 @@ export function convertCurrency(req: FxConvertRequest): FxConvertResponse {
   fromBal.available = roundByCcy(req.from, fromBal.available - amount);
   s.balances[req.to].available = roundByCcy(req.to, s.balances[req.to].available + credited);
 
-  return { ok: true, asOf, rate, debited: amount, credited, snapshot: snapshot() };
+  const snap = snapshot();
+  persistState();
+  notify(snap);
+  return { ok: true, asOf, rate, debited: amount, credited, snapshot: snap };
 }
 
 export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
@@ -505,6 +704,8 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
     if (base !== "BTC" && base !== "ETH" && base !== "USDT" && base !== "USDC") {
       record.status = "rejected";
       s.orders.set(orderId, record);
+      persistState();
+      notify(snapshot());
       return {
         orderId,
         status: "rejected",
@@ -528,6 +729,8 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
         if (b.available < value) {
           record.status = "rejected";
           s.orders.set(orderId, record);
+          persistState();
+          notify(snapshot());
           return {
             orderId,
             status: "rejected",
@@ -545,6 +748,8 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
         if (coin.available < qty) {
           record.status = "rejected";
           s.orders.set(orderId, record);
+          persistState();
+          notify(snapshot());
           return {
             orderId,
             status: "rejected",
@@ -565,6 +770,9 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
       record.updatedAt = nowIso();
       s.orders.set(orderId, record);
 
+      persistState();
+      notify(snapshot());
+
       return {
         orderId,
         status: "filled",
@@ -583,6 +791,8 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
       if (b.available < value) {
         record.status = "rejected";
         s.orders.set(orderId, record);
+        persistState();
+        notify(snapshot());
         return {
           orderId,
           status: "rejected",
@@ -621,6 +831,8 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
       if (!pos || pos.quantity < qty) {
         record.status = "rejected";
         s.orders.set(orderId, record);
+        persistState();
+        notify(snapshot());
         return {
           orderId,
           status: "rejected",
@@ -645,6 +857,9 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
     record.updatedAt = nowIso();
     s.orders.set(orderId, record);
 
+    persistState();
+    notify(snapshot());
+
     return {
       orderId,
       status: "filled",
@@ -663,6 +878,8 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
   if (!Number.isFinite(limitPx) || limitPx <= 0) {
     record.status = "rejected";
     s.orders.set(orderId, record);
+    persistState();
+    notify(snapshot());
     return {
       orderId,
       status: "rejected",
@@ -680,6 +897,8 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
     if (b.available < reserveValue) {
       record.status = "rejected";
       s.orders.set(orderId, record);
+      persistState();
+      notify(snapshot());
       return {
         orderId,
         status: "rejected",
@@ -700,6 +919,8 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
       if (coin.available < qty) {
         record.status = "rejected";
         s.orders.set(orderId, record);
+        persistState();
+        notify(snapshot());
         return {
           orderId,
           status: "rejected",
@@ -718,6 +939,8 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
       if (!pos || pos.quantity < qty) {
         record.status = "rejected";
         s.orders.set(orderId, record);
+        persistState();
+        notify(snapshot());
         return {
           orderId,
           status: "rejected",
@@ -742,15 +965,10 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
   record.updatedAt = nowIso();
   s.orders.set(orderId, record);
 
-  const delayMs = Math.floor((60_000 + hashTo01(orderId) * 240_000)); // 1-5 minutes
-  const timer = setTimeout(() => {
-    try {
-      applyFill(orderId, round2(limitPx));
-    } catch {
-      // ignore
-    }
-  }, delayMs);
-  s.fillTimers.set(orderId, timer);
+  scheduleFillIfNeeded(orderId);
+
+  persistState();
+  notify(snapshot());
 
   return {
     orderId,
@@ -782,7 +1000,10 @@ export function cancelOrder(orderId: string): CancelOrderResponse {
   releaseReservation(order);
   const updated = setOrderStatus(orderId, "canceled");
 
-  return { ok: true, asOf, order: { ...updated }, snapshot: snapshot() };
+  const snap = snapshot();
+  persistState();
+  notify(snap);
+  return { ok: true, asOf, order: { ...updated }, snapshot: snap };
 }
 
 export function modifyOrder(orderId: string, patch: ModifyOrderRequest): ModifyOrderResponse {
@@ -897,7 +1118,10 @@ export function modifyOrder(orderId: string, patch: ModifyOrderRequest): ModifyO
     order.updatedAt = nowIso();
     s.orders.set(orderId, order);
 
-    return { ok: true, asOf, order: { ...order }, snapshot: snapshot() };
+    const snap = snapshot();
+    persistState();
+    notify(snap);
+    return { ok: true, asOf, order: { ...order }, snapshot: snap };
   } catch (e) {
     return {
       ok: false,

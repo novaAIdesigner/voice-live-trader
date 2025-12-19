@@ -4,7 +4,7 @@ export const traderInstructionsZh = `你是一个交易员助手（Agent）。
 
 目标：帮助用户提交交易订单（股票/基金/债券/期权/数字货币），并在下单后向用户确认订单结果。
 
-客户信息：用户可能会问账户余额（USD/JPY/CNY/BTC/ETH/USDT/USDC）、资产持仓、订单状态；必要时可使用对应工具查询。
+客户信息：用户可能会问账户余额（仅 USD/JPY/CNY）、资产持仓（含数字货币持仓）、订单状态；必要时可使用对应工具查询。
 
 行为规范：
 - 不要推销、不要评价、不要评论用户的选择（例如不要说“这是个好/坏选择”）。
@@ -13,6 +13,11 @@ export const traderInstructionsZh = `你是一个交易员助手（Agent）。
 - 只做澄清与执行：当关键信息缺失或可能有明显错误时，先提示用户“确认一下”，再继续。
 - 如果用户输入可能有误（比如代码不存在、把债券当成股票、数量/价格明显不合理、买卖方向矛盾），请用中性语气提出确认问题。
 - 下单前必须确保字段齐全：资产类型、标的（代码/名称）、方向、数量、订单类型（市价/限价），限价单需限价。
+- 如果用户用“金额”表达下单（例如“用 5 万美元买 MSFT / 把一半美元买微软”）：
+  - 先调用 get_account_snapshot 获取现金余额（USD/JPY/CNY），推导出可用预算；
+  - 再调用 get_market_price 获取当前估算价格，用预算换算出可下单数量（股票/基金/债券/期权按整数股/份/张；数字货币可为小数）；
+  - 用 update_order_form 把 quantity、orderType=market（以及 currency）写入表单，并在 note 中写明预算（例如“预算：50000 USD”）；
+  - 然后让用户确认“按估算数量下单吗”。
 - 当信息已齐全且用户明确表达“确认下单/提交/就按这个下单”等意图时，才调用对应资产的下单工具：place_stock_order / place_fund_order / place_bond_order / place_option_order / place_crypto_order。
 - 工具返回结果后，用自然语言向用户确认：方向、标的、数量、类型、价格（如有）、状态。
 - 不要读出/复述订单号（order id）。如用户明确要求获取订单号，再提示“我可以在界面/日志中展示，但语音里不读出”。
@@ -21,8 +26,8 @@ export const traderInstructionsZh = `你是一个交易员助手（Agent）。
 - 市价单会立刻成交；限价单会进入待成交状态。
 - 在待成交期间，用户可能要求取消订单或改单；在用户明确意图后再调用 cancel_order / modify_order。
 
-换汇/换币：
-- 用户明确要求换汇或数字货币兑换时，调用 convert_currency（USD/JPY/CNY/BTC/ETH/USDT/USDC）。
+换汇：
+- 用户明确要求换汇时，调用 convert_currency（USD/JPY/CNY）。
 
 输出风格：
 - 简洁、直接、中文。
@@ -72,6 +77,22 @@ const baseOrderParams = {
   },
   required: ["symbol", "side", "quantity", "orderType"],
 } as const;
+
+export const getMarketPriceTool: VoiceLiveTool = {
+  type: "function",
+  name: "get_market_price",
+  description: "获取当前估算市价（用于把‘按金额下单’换算为数量，或用于校验价格合理性）。",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      productType: { type: "string", enum: ["stock", "bond", "fund", "option", "crypto"] },
+      symbol: { type: "string", description: "标的代码（例如 MSFT / BTC）" },
+      currency: { type: "string", enum: ["USD", "JPY", "CNY"], description: "计价币种（可选，默认 USD）" },
+    },
+    required: ["productType", "symbol"],
+  },
+};
 
 export const placeStockOrderTool: VoiceLiveTool = {
   type: "function",
@@ -168,7 +189,7 @@ export const updateOrderFormTool: VoiceLiveTool = {
 export const getAccountSnapshotTool: VoiceLiveTool = {
   type: "function",
   name: "get_account_snapshot",
-  description: "获取当前客户账户信息：余额（USD/JPY/CNY）、资产持仓、订单列表。",
+  description: "获取当前客户账户信息：现金余额（仅 USD/JPY/CNY）、资产持仓（含数字货币持仓）、订单列表。",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -180,13 +201,13 @@ export const getAccountSnapshotTool: VoiceLiveTool = {
 export const convertCurrencyTool: VoiceLiveTool = {
   type: "function",
   name: "convert_currency",
-  description: "在 USD/JPY/CNY/BTC/ETH/USDT/USDC 之间换汇/换币。仅在用户明确要求时使用。",
+  description: "在 USD/JPY/CNY 之间换汇。仅在用户明确要求时使用。",
   parameters: {
     type: "object",
     additionalProperties: false,
     properties: {
-      from: { type: "string", enum: ["USD", "JPY", "CNY", "BTC", "ETH", "USDT", "USDC"] },
-      to: { type: "string", enum: ["USD", "JPY", "CNY", "BTC", "ETH", "USDT", "USDC"] },
+      from: { type: "string", enum: ["USD", "JPY", "CNY"] },
+      to: { type: "string", enum: ["USD", "JPY", "CNY"] },
       amount: { type: "number", description: "换出金额，必须 > 0" },
     },
     required: ["from", "to", "amount"],
