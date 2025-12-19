@@ -1,36 +1,37 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Voice Live Trader Agent
 
-## Getting Started
+一个基于 Azure Speech Voice Live 的 Web App：
+- 连接配置（Voice Live WebSocket）
+- 用量统计（tokens/音频/网络字节）
+- Chat 窗口（文本 + 可选麦克风语音）
+- 交易表单（提交到后台 API）
 
-First, run the development server:
+## 运行
 
-```bash
+```powershell
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+浏览器打开 `http://localhost:3000`。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 使用 Voice Live
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+在页面左侧填写：
+- `Resource Host`：例如 `<your-resource-name>.services.ai.azure.com`（或旧资源的 `...cognitiveservices.azure.com`）
+- `API Version`：默认 `2025-10-01`
+- `Model`：默认 `gpt-realtime`
+- `API Key`
 
-## Learn More
+然后点击“连接”。连接成功后：
+- Chat 输入交易需求，Agent 会在需要时通过 `place_order` 工具调用 `/api/trade` 下单，并用中性语气向你确认。
+- 点击“开启麦克风”可把语音流发送到 Voice Live（PCM16 24kHz）。
 
-To learn more about Next.js, take a look at the following resources:
+注意：浏览器环境无法设置 WebSocket Header，所以此项目使用 `api-key` 作为 URL query 参数连接（通过 `wss://...&api-key=...`）。
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 后台下单 API
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `POST /api/trade`
+	- 入参：`src/lib/trade/types.ts` 的 `TradeOrderRequest`
+	- 出参：`TradeOrderResponse`
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+本项目的 `/api/trade` 目前为示例实现（校验 + 返回订单号），你可以在这里接入真实券商/交易系统。
