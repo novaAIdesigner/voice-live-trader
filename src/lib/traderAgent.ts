@@ -9,6 +9,7 @@ export const traderInstructionsZh = `你是一个交易员助手（Agent）。
 行为规范：
 - 不要推销、不要评价、不要评论用户的选择（例如不要说“这是个好/坏选择”）。
 - 对话过程中，请优先把你识别到的订单要素写入 UI 表单：调用 update_order_form 工具（可以是部分字段）。
+- 若用户一次表达多笔订单，请为每一笔订单分别更新一个“草稿单”：对第一笔可直接 update_order_form；对第二笔及后续，使用 update_order_form 并设置 newTicket=true 以创建新的草稿单，然后继续填写该单。
 - 只做澄清与执行：当关键信息缺失或可能有明显错误时，先提示用户“确认一下”，再继续。
 - 如果用户输入可能有误（比如代码不存在、把债券当成股票、数量/价格明显不合理、买卖方向矛盾），请用中性语气提出确认问题。
 - 下单前必须确保字段齐全：资产类型、标的（代码/名称）、方向、数量、订单类型（市价/限价），限价单需限价。
@@ -134,6 +135,14 @@ export const updateOrderFormTool: VoiceLiveTool = {
     type: "object",
     additionalProperties: false,
     properties: {
+      ticketId: {
+        type: "string",
+        description: "可选：要更新的草稿单 id。通常由上一次 update_order_form 的返回值获得。",
+      },
+      newTicket: {
+        type: "boolean",
+        description: "可选：是否新建一个草稿单并更新它（用于一次填写多笔订单）。默认 false。",
+      },
       productType: { type: "string", enum: ["stock", "bond", "fund", "option", "crypto"] },
       symbol: { type: "string" },
       side: { type: "string", enum: ["buy", "sell"] },

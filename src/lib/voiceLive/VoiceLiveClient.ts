@@ -82,6 +82,65 @@ function getArray(r: Record<string, unknown>, key: string): unknown[] | undefine
   return Array.isArray(v) ? v : undefined;
 }
 
+function redactForConsole(value: unknown, depth = 0, keyHint?: string): unknown {
+  const maxDepth = 5;
+  const maxString = 400;
+  const maxArray = 50;
+
+  if (depth > maxDepth) return "[Truncated]";
+
+  if (typeof value === "string") {
+    const k = (keyHint ?? "").toLowerCase();
+    if (k === "audio" || k === "delta") return `<${k}:base64:${value.length}>`;
+    if (value.length > maxString) return `${value.slice(0, maxString)}…(len=${value.length})`;
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    const head = value.slice(0, maxArray).map((v) => redactForConsole(v, depth + 1));
+    if (value.length > maxArray) return [...head, `…(+${value.length - maxArray} items)`];
+    return head;
+  }
+
+  if (!value || typeof value !== "object") return value;
+
+  const obj = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(obj)) {
+    out[k] = redactForConsole(obj[k], depth + 1, k);
+  }
+  return out;
+}
+
+function shouldLogVoiceLiveEvent(type: string) {
+  // Avoid console spam from high-frequency audio/transcript streaming.
+  const noisy = new Set([
+    // outgoing mic chunks
+    "input_audio_buffer.append",
+    // incoming audio chunks
+    "response.audio.delta",
+    // incoming transcript/text streaming (very high frequency)
+    "response.text.delta",
+    "response.output_text.delta",
+    "response.audio_transcript.delta",
+    "response.output_audio_transcript.delta",
+  ]);
+  if (noisy.has(type)) return false;
+
+  // Keep these input-audio buffer events (useful for barge-in/debug).
+  if (type === "input_audio_buffer.speech_started" || type === "input_audio_buffer.speech_stopped") return true;
+  if (type === "input_audio_buffer_speech_started" || type === "input_audio_buffer_speech_stopped") return true;
+
+  // Keep major lifecycle + tool + response events.
+  if (type.startsWith("session.")) return true;
+  if (type.startsWith("conversation.")) return true;
+  if (type.startsWith("response.")) return true;
+  if (type === "error") return true;
+
+  // Default: log everything else (both directions).
+  return true;
+}
+
 export class VoiceLiveClient {
   private ws: WebSocket | null = null;
   private status: VoiceLiveStatus = "disconnected";
@@ -142,6 +201,16 @@ export class VoiceLiveClient {
 
   private send(event: VoiceLiveClientEvent) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error("WebSocket not connected");
+
+    try {
+      // Log every outgoing client event. Large payload fields (audio/delta) are redacted.
+      if (shouldLogVoiceLiveEvent(event.type)) {
+        console.debug("[VoiceLive] send", event.type, redactForConsole(event));
+      }
+    } catch {
+      // ignore
+    }
+
     const payload = JSON.stringify(event);
     this.ws.send(payload);
     this.wire.wsSentBytes += new TextEncoder().encode(payload).byteLength;
@@ -200,6 +269,12 @@ export class VoiceLiveClient {
     ws.onopen = () => {
       this.setStatus("connected");
 
+      try {
+        console.debug("[VoiceLive] ws open");
+      } catch {
+        // ignore
+      }
+
       const sessionUpdate: VoiceLiveClientEvent = {
         type: "session.update",
         session: {
@@ -244,6 +319,15 @@ export class VoiceLiveClient {
         event = JSON.parse(data);
       } catch {
         return;
+      }
+
+      try {
+        // Log every incoming server event. Large payload fields (audio/delta) are redacted.
+        if (shouldLogVoiceLiveEvent(event.type)) {
+          console.debug("[VoiceLive] recv", event.type, redactForConsole(event));
+        }
+      } catch {
+        // ignore
       }
 
       this.callbacks.onServerEvent?.(event);
@@ -524,10 +608,20 @@ export class VoiceLiveClient {
     };
 
     ws.onerror = () => {
+      try {
+        console.debug("[VoiceLive] ws error");
+      } catch {
+        // ignore
+      }
       this.callbacks.onError?.("WebSocket error");
     };
 
     ws.onclose = () => {
+      try {
+        console.debug("[VoiceLive] ws close");
+      } catch {
+        // ignore
+      }
       this.setStatus("disconnected");
       this.stopMicrophone();
       this.player.stop();
