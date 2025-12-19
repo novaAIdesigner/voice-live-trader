@@ -696,7 +696,9 @@ export class VoiceLiveClient {
     const ac = new AudioContext();
     this.audioContext = ac;
 
-    await ac.audioWorklet.addModule("/worklets/pcm16-downsampler.js");
+    // BasePath-safe (GitHub Pages): avoid absolute "/worklets/..." which 404s under /<repo>/.
+    const workletUrl = new URL("worklets/pcm16-downsampler.js", document.baseURI).toString();
+    await ac.audioWorklet.addModule(workletUrl);
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     this.mediaStream = stream;
