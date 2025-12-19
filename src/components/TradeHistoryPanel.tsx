@@ -15,23 +15,23 @@ type Props = {
 
 export function TradeHistoryPanel({ items }: Props) {
   return (
-    <section className="rounded-lg border border-black/10 bg-white p-4 dark:border-white/15 dark:bg-zinc-950">
+    <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">交易记录</h2>
-        <div className="text-xs text-zinc-600 dark:text-zinc-400">{items.length} 条</div>
+        <h2 className="text-sm font-semibold text-foreground">交易记录</h2>
+        <div className="text-xs text-muted-foreground">{items.length} 条</div>
       </div>
 
       <div className="mt-3 space-y-2">
         {items.length === 0 ? (
-          <div className="text-sm text-zinc-600 dark:text-zinc-400">暂无记录（提交后会显示在这里）。</div>
+          <div className="text-sm text-muted-foreground">暂无记录（提交后会显示在这里）。</div>
         ) : null}
 
         {items.map((it) => (
           <div
             key={it.id}
-            className="rounded-md border border-black/10 bg-zinc-50 p-3 text-sm text-zinc-900 dark:border-white/15 dark:bg-black dark:text-zinc-100"
+            className="rounded-md border border-border bg-transparent p-3 text-sm text-foreground"
           >
-            <div className="text-xs text-zinc-600 dark:text-zinc-400">
+            <div className="text-xs text-muted-foreground">
               {new Date(it.createdAt).toLocaleString()}
             </div>
             <div className="mt-1 font-medium">{it.summary}</div>

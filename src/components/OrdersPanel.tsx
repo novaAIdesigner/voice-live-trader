@@ -60,15 +60,15 @@ export function OrdersPanel({ orders, onCancel, onModify }: Props) {
   }
 
   return (
-    <section className="rounded-lg border border-black/10 bg-white p-4 dark:border-white/15 dark:bg-zinc-950">
+    <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">订单</h2>
-        <div className="text-xs text-zinc-600 dark:text-zinc-400">{orders.length} 笔</div>
+        <h2 className="text-sm font-semibold text-foreground">订单</h2>
+        <div className="text-xs text-muted-foreground">{orders.length} 笔</div>
       </div>
-      {error ? <div className="mt-2 text-xs text-red-600">{error}</div> : null}
+      {error ? <div className="mt-2 text-xs text-destructive">{error}</div> : null}
 
       <div className="mt-3 space-y-2">
-        {orders.length === 0 ? <div className="text-sm text-zinc-600 dark:text-zinc-400">暂无订单</div> : null}
+        {orders.length === 0 ? <div className="text-sm text-muted-foreground">暂无订单</div> : null}
 
         {orders.map((o) => {
           const pending = o.status === "pending";
@@ -78,14 +78,14 @@ export function OrdersPanel({ orders, onCancel, onModify }: Props) {
           return (
             <div
               key={o.orderId}
-              className="rounded-md border border-black/10 bg-zinc-50 p-3 text-sm text-zinc-900 dark:border-white/15 dark:bg-black dark:text-zinc-100"
+              className="rounded-md border border-border bg-transparent p-3 text-sm text-foreground"
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="font-medium">
                     {o.side} {o.quantity} {o.productType} {o.symbol}
                   </div>
-                  <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  <div className="mt-1 text-xs text-muted-foreground">
                     {o.orderType === "market" ? "market" : `limit ${o.limitPrice}`} · {o.currency} · 状态 {o.status}
                   </div>
                 </div>
@@ -93,14 +93,14 @@ export function OrdersPanel({ orders, onCancel, onModify }: Props) {
                 {pending ? (
                   <div className="flex gap-2">
                     <button
-                      className="h-8 rounded-md border border-black/10 bg-transparent px-3 text-xs font-medium text-zinc-900 disabled:opacity-50 dark:border-white/15 dark:text-zinc-100"
+                      className="h-8 rounded-md border border-border bg-transparent px-3 text-xs font-medium text-foreground disabled:opacity-50 hover:bg-accent"
                       onClick={() => doCancel(o.orderId)}
                       disabled={busy}
                     >
                       取消
                     </button>
                     <button
-                      className="h-8 rounded-md border border-black/10 bg-transparent px-3 text-xs font-medium text-zinc-900 disabled:opacity-50 dark:border-white/15 dark:text-zinc-100"
+                      className="h-8 rounded-md border border-border bg-transparent px-3 text-xs font-medium text-foreground disabled:opacity-50 hover:bg-accent"
                       onClick={() => startEdit(o.orderId)}
                       disabled={busy}
                     >
@@ -111,7 +111,7 @@ export function OrdersPanel({ orders, onCancel, onModify }: Props) {
               </div>
 
               {o.status === "filled" && o.fillPrice !== undefined ? (
-                <div className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
+                <div className="mt-2 text-xs text-muted-foreground">
                   成交价 {o.fillPrice} · 成交额 {o.fillValue}
                 </div>
               ) : null}
@@ -119,7 +119,7 @@ export function OrdersPanel({ orders, onCancel, onModify }: Props) {
               {editing ? (
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <input
-                    className="h-9 rounded-md border border-black/10 bg-transparent px-2 text-xs text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100"
+                    className="h-9 rounded-md border border-border bg-transparent px-2 text-xs text-foreground outline-none"
                     value={q}
                     onChange={(e) => setQ(e.target.value)}
                     inputMode="decimal"
@@ -127,7 +127,7 @@ export function OrdersPanel({ orders, onCancel, onModify }: Props) {
                     disabled={busy}
                   />
                   <input
-                    className="h-9 rounded-md border border-black/10 bg-transparent px-2 text-xs text-zinc-900 outline-none disabled:opacity-50 dark:border-white/15 dark:text-zinc-100"
+                    className="h-9 rounded-md border border-border bg-transparent px-2 text-xs text-foreground outline-none disabled:opacity-50"
                     value={limit}
                     onChange={(e) => setLimit(e.target.value)}
                     inputMode="decimal"
@@ -136,7 +136,7 @@ export function OrdersPanel({ orders, onCancel, onModify }: Props) {
                   />
 
                   <button
-                    className="col-span-2 h-9 rounded-md bg-black px-3 text-xs font-medium text-white disabled:opacity-50 dark:bg-white dark:text-black"
+                    className="col-span-2 h-9 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50 hover:bg-primary/90"
                     onClick={() => doModify(o.orderId)}
                     disabled={busy}
                   >
@@ -144,7 +144,7 @@ export function OrdersPanel({ orders, onCancel, onModify }: Props) {
                   </button>
 
                   <button
-                    className="col-span-2 h-9 rounded-md border border-black/10 bg-transparent px-3 text-xs font-medium text-zinc-900 disabled:opacity-50 dark:border-white/15 dark:text-zinc-100"
+                    className="col-span-2 h-9 rounded-md border border-border bg-transparent px-3 text-xs font-medium text-foreground disabled:opacity-50 hover:bg-accent"
                     onClick={() => setEditingId(null)}
                     disabled={busy}
                   >

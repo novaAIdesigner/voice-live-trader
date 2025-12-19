@@ -51,10 +51,10 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
   return (
     <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">方向</span>
+          <span className="text-xs text-zinc-500">方向</span>
           <select
             className={
-              "h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100" +
+              "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
               flash(flashSide)
             }
             value={order.side}
@@ -67,10 +67,10 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
         </label>
 
         <label className="md:col-span-2 grid gap-1">
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">标的（代码/名称）</span>
+          <span className="text-xs text-zinc-500">标的（代码/名称）</span>
           <input
             className={
-              "h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100" +
+              "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
               flash(flashSymbol)
             }
             value={order.symbol}
@@ -83,10 +83,10 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
         {order.productType === "option" ? (
           <>
             <label className="grid gap-1">
-              <span className="text-xs text-zinc-600 dark:text-zinc-400">期权类型</span>
+              <span className="text-xs text-zinc-500">期权类型</span>
               <select
                 className={
-                  "h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100" +
+                  "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
                   flash(flashOptionType)
                 }
                 value={order.optionType ?? "call"}
@@ -99,10 +99,10 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
             </label>
 
             <label className="grid gap-1">
-              <span className="text-xs text-zinc-600 dark:text-zinc-400">行权价</span>
+              <span className="text-xs text-zinc-500">行权价</span>
               <input
                 className={
-                  "h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100" +
+                  "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
                   flash(flashStrike)
                 }
                 value={order.strike ?? ""}
@@ -116,10 +116,10 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
             </label>
 
             <label className="md:col-span-3 grid gap-1">
-              <span className="text-xs text-zinc-600 dark:text-zinc-400">到期日（可选）</span>
+              <span className="text-xs text-zinc-500">到期日（可选）</span>
               <input
                 className={
-                  "h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100" +
+                  "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
                   flash(flashExpiry)
                 }
                 value={order.expiry ?? ""}
@@ -133,10 +133,10 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
 
         {order.productType === "bond" ? (
           <label className="md:col-span-3 grid gap-1">
-            <span className="text-xs text-zinc-600 dark:text-zinc-400">到期日（可选）</span>
+            <span className="text-xs text-zinc-500">到期日（可选）</span>
             <input
               className={
-                "h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100" +
+                "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
                 flash(flashMaturity)
               }
               value={order.maturity ?? ""}
@@ -148,10 +148,10 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
         ) : null}
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">数量</span>
+          <span className="text-xs text-zinc-500">数量</span>
           <input
             className={
-              "h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100" +
+              "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
               flash(flashQty)
             }
             value={Number.isFinite(order.quantity) ? String(order.quantity) : ""}
@@ -163,10 +163,10 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
         </label>
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">订单类型</span>
+          <span className="text-xs text-zinc-500">订单类型</span>
           <select
             className={
-              "h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100" +
+              "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
               flash(flashOrderType)
             }
             value={order.orderType}
@@ -179,10 +179,10 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
         </label>
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">限价（限价单必填）</span>
+          <span className="text-xs text-zinc-500">限价（限价单必填）</span>
           <input
             className={
-              "h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none disabled:opacity-50 dark:border-white/15 dark:text-zinc-100" +
+              "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none disabled:opacity-50" +
               flash(flashLimit)
             }
             value={order.limitPrice ?? ""}
@@ -194,10 +194,10 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
         </label>
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">币种</span>
+          <span className="text-xs text-zinc-500">币种</span>
           <select
             className={
-              "h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none disabled:opacity-50 dark:border-white/15 dark:text-zinc-100" +
+              "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none disabled:opacity-50" +
               flash(flashCurrency)
             }
             value={(order.currency ?? "USD") as CurrencyCode}
@@ -213,10 +213,10 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
         </label>
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">有效期（可选）</span>
+          <span className="text-xs text-zinc-500">有效期（可选）</span>
           <select
             className={
-              "h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100" +
+              "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
               flash(flashTif)
             }
             value={order.timeInForce ?? "day"}

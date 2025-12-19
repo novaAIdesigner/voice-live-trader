@@ -114,16 +114,11 @@ function redactForConsole(value: unknown, depth = 0, keyHint?: string): unknown 
 
 function shouldLogVoiceLiveEvent(type: string) {
   // Avoid console spam from high-frequency audio/transcript streaming.
+  if (type.endsWith(".delta")) return false;
+
   const noisy = new Set([
     // outgoing mic chunks
     "input_audio_buffer.append",
-    // incoming audio chunks
-    "response.audio.delta",
-    // incoming transcript/text streaming (very high frequency)
-    "response.text.delta",
-    "response.output_text.delta",
-    "response.audio_transcript.delta",
-    "response.output_audio_transcript.delta",
   ]);
   if (noisy.has(type)) return false;
 
@@ -208,7 +203,7 @@ export class VoiceLiveClient {
     try {
       // Log every outgoing client event. Large payload fields (audio/delta) are redacted.
       if (shouldLogVoiceLiveEvent(event.type)) {
-        console.debug("[VoiceLive] send", event.type, redactForConsole(event));
+        console.info("[VoiceLive] send", event.type, redactForConsole(event));
       }
     } catch {
       // ignore
@@ -344,7 +339,7 @@ export class VoiceLiveClient {
       try {
         // Log every incoming server event. Large payload fields (audio/delta) are redacted.
         if (shouldLogVoiceLiveEvent(event.type)) {
-          console.debug("[VoiceLive] recv", event.type, redactForConsole(event));
+          console.info("[VoiceLive] recv", event.type, redactForConsole(event));
         }
       } catch {
         // ignore

@@ -29,16 +29,16 @@ export function ConnectionPanel({
   const voiceType = config.voice.type;
 
   return (
-    <section className="rounded-lg border border-black/10 bg-white p-4 dark:border-white/15 dark:bg-zinc-950">
+    <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">连接配置</h2>
+        <h2 className="text-sm font-semibold text-foreground">连接配置</h2>
       </div>
 
       <div className="mt-3 grid grid-cols-1 gap-3">
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">Endpoint（host only）</span>
+          <span className="text-xs text-zinc-500">Endpoint（host only）</span>
           <input
-            className="h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100"
+            className="h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none"
             value={config.resourceHost}
             onChange={(e) =>
               onChange({ ...config, resourceHost: normalizeResourceHost(e.target.value) || e.target.value.trim() })
@@ -49,9 +49,9 @@ export function ConnectionPanel({
         </label>
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">API Key</span>
+          <span className="text-xs text-zinc-500">API Key</span>
           <input
-            className="h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100"
+            className="h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none"
             value={config.apiKey}
             onChange={(e) => onChange({ ...config, apiKey: e.target.value })}
             placeholder="******"
@@ -62,7 +62,7 @@ export function ConnectionPanel({
         <div className="mt-2 flex flex-wrap gap-2">
           {status !== "connected" ? (
             <button
-              className="h-9 rounded-md bg-black px-4 text-sm font-medium text-white disabled:opacity-50 dark:bg-white dark:text-black"
+              className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-50"
               onClick={onConnect}
               disabled={!config.resourceHost || !config.apiVersion || !config.model || !config.apiKey}
             >
@@ -70,7 +70,7 @@ export function ConnectionPanel({
             </button>
           ) : (
             <button
-              className="h-9 rounded-md border border-black/10 bg-transparent px-4 text-sm font-medium text-zinc-900 dark:border-white/15 dark:text-zinc-100"
+              className="h-9 rounded-md border border-border bg-transparent px-4 text-sm font-medium text-foreground hover:bg-accent"
               onClick={onDisconnect}
             >
               断开
@@ -78,7 +78,7 @@ export function ConnectionPanel({
           )}
 
           <button
-            className="h-9 rounded-md border border-black/10 bg-transparent px-4 text-sm font-medium text-zinc-900 disabled:opacity-50 dark:border-white/15 dark:text-zinc-100"
+            className="h-9 rounded-md border border-border bg-transparent px-4 text-sm font-medium text-foreground disabled:opacity-50 hover:bg-accent"
             onClick={onToggleMic}
             disabled={status !== "connected"}
           >
@@ -86,15 +86,15 @@ export function ConnectionPanel({
           </button>
         </div>
 
-        <details className="mt-1 rounded-md border border-black/10 dark:border-white/15">
-          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-zinc-900 dark:text-zinc-100">
+        <details className="mt-1 rounded-md border border-border">
+          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-foreground hover:bg-accent">
             高级设置
           </summary>
-          <div className="grid grid-cols-1 gap-3 border-t border-black/10 p-3 dark:border-white/15">
+          <div className="grid grid-cols-1 gap-3 border-t border-border p-3">
             <label className="grid gap-1">
-              <span className="text-xs text-zinc-600 dark:text-zinc-400">API Version</span>
+              <span className="text-xs text-muted-foreground">API Version</span>
               <input
-                className="h-9 rounded-md border border-black/10 bg-transparent px-3 text-sm text-zinc-900 outline-none dark:border-white/15 dark:text-zinc-100"
+                className="h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none"
                 value={config.apiVersion}
                 onChange={(e) => onChange({ ...config, apiVersion: e.target.value.trim() })}
                 placeholder="2025-10-01"
