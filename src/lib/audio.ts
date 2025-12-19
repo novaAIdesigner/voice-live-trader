@@ -23,6 +23,7 @@ export function pcm16BytesToFloat32(bytes: Uint8Array): Float32Array {
 export class Pcm16Player {
   private audioContext: AudioContext;
   private nextStartTime = 0;
+  private activeSources = new Set<AudioBufferSourceNode>();
 
   constructor(audioContext?: AudioContext) {
     this.audioContext = audioContext ?? new AudioContext({ sampleRate: 24000 });
@@ -42,6 +43,11 @@ export class Pcm16Player {
     source.buffer = buffer;
     source.connect(this.audioContext.destination);
 
+    this.activeSources.add(source);
+    source.onended = () => {
+      this.activeSources.delete(source);
+    };
+
     const now = this.audioContext.currentTime;
     if (this.nextStartTime < now) this.nextStartTime = now;
 
@@ -51,6 +57,14 @@ export class Pcm16Player {
 
   stop() {
     this.nextStartTime = 0;
+    for (const s of this.activeSources) {
+      try {
+        s.stop(0);
+      } catch {
+        // ignore
+      }
+    }
+    this.activeSources.clear();
   }
 
   get context() {

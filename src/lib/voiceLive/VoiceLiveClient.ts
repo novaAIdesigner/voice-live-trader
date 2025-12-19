@@ -89,6 +89,7 @@ export class VoiceLiveClient {
   private enableBargeIn = true;
   private responseActive = false;
   private responseApiDone = true;
+  private bargeInCancelSent = false;
 
   private callbacks: VoiceLiveCallbacks;
   private tools: VoiceLiveTool[];
@@ -103,6 +104,10 @@ export class VoiceLiveClient {
   private speechEndAtMs: number | null = null;
   private waitingFirstResponse = false;
   private speechToFirstResponseMs: number[] = [];
+
+  private assistantTextBuffer = "";
+  private assistantTextDoneEmitted = false;
+  private lastAssistantTextDone = "";
 
   private audioContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
@@ -146,6 +151,14 @@ export class VoiceLiveClient {
   async connect(config: VoiceLiveConnectionConfig) {
     if (this.ws) this.disconnect();
 
+    // Best-effort: resume playback context from a user gesture (connect button).
+    // This helps avoid autoplay restrictions when the first audio delta arrives.
+    try {
+      await this.player.ensureRunning();
+    } catch {
+      // ignore
+    }
+
     this.usage = emptyUsage();
     this.wire = emptyWire();
     this.emitStats();
@@ -155,6 +168,7 @@ export class VoiceLiveClient {
     this.enableBargeIn = config.enableBargeIn !== false;
     this.responseActive = false;
     this.responseApiDone = true;
+    this.bargeInCancelSent = false;
 
     this.speechEndAtMs = null;
     this.waitingFirstResponse = false;
@@ -263,12 +277,16 @@ export class VoiceLiveClient {
       if (type === "response.created") {
         this.responseActive = true;
         this.responseApiDone = false;
+        this.bargeInCancelSent = false;
+        this.assistantTextBuffer = "";
+        this.assistantTextDoneEmitted = false;
         markFirstResponse();
       }
 
       if (type === "response.done") {
         this.responseActive = false;
         this.responseApiDone = true;
+        this.bargeInCancelSent = false;
       }
 
       if (type === "input_audio_buffer.speech_stopped" || type === "input_audio_buffer_speech_stopped") {
@@ -281,9 +299,10 @@ export class VoiceLiveClient {
         this.player.stop();
 
         // Cancel the in-flight response if there is one.
-        if (this.responseActive && !this.responseApiDone) {
+        if (this.responseActive && !this.responseApiDone && !this.bargeInCancelSent) {
           try {
             this.send({ type: "response.cancel" });
+            this.bargeInCancelSent = true;
           } catch {
             // ignore
           }
@@ -300,24 +319,65 @@ export class VoiceLiveClient {
 
       if (type === "response.text.delta") {
         const delta = getString(r, "delta");
-        if (delta) this.callbacks.onAssistantTextDelta?.(delta);
+        if (delta) {
+          this.assistantTextBuffer += delta;
+          this.callbacks.onAssistantTextDelta?.(delta);
+        }
         markFirstResponse();
       }
 
       if (type === "response.output_text.delta") {
         const delta = getString(r, "delta");
-        if (delta) this.callbacks.onAssistantTextDelta?.(delta);
+        if (delta) {
+          this.assistantTextBuffer += delta;
+          this.callbacks.onAssistantTextDelta?.(delta);
+        }
+        markFirstResponse();
+      }
+
+      if (type === "response.audio_transcript.delta" || type === "response.output_audio_transcript.delta") {
+        const delta = getString(r, "delta");
+        if (delta) {
+          this.assistantTextBuffer += delta;
+          this.callbacks.onAssistantTextDelta?.(delta);
+        }
         markFirstResponse();
       }
 
       if (type === "response.text.done") {
         const text = getString(r, "text");
-        if (text) this.callbacks.onAssistantTextDone?.(text);
+        if (text) {
+          this.assistantTextBuffer = text;
+          if (!this.assistantTextDoneEmitted && text !== this.lastAssistantTextDone) {
+            this.assistantTextDoneEmitted = true;
+            this.lastAssistantTextDone = text;
+            this.callbacks.onAssistantTextDone?.(text);
+          }
+        }
       }
 
       if (type === "response.output_text.done") {
         const text = getString(r, "text");
-        if (text) this.callbacks.onAssistantTextDone?.(text);
+        if (text) {
+          this.assistantTextBuffer = text;
+          if (!this.assistantTextDoneEmitted && text !== this.lastAssistantTextDone) {
+            this.assistantTextDoneEmitted = true;
+            this.lastAssistantTextDone = text;
+            this.callbacks.onAssistantTextDone?.(text);
+          }
+        }
+      }
+
+      if (type === "response.audio_transcript.done" || type === "response.output_audio_transcript.done") {
+        const text = getString(r, "text");
+        if (text) {
+          this.assistantTextBuffer = text;
+          if (!this.assistantTextDoneEmitted && text !== this.lastAssistantTextDone) {
+            this.assistantTextDoneEmitted = true;
+            this.lastAssistantTextDone = text;
+            this.callbacks.onAssistantTextDone?.(text);
+          }
+        }
       }
 
       if (type === "response.audio.delta") {
@@ -362,7 +422,14 @@ export class VoiceLiveClient {
                 if (t) text += t;
               }
             }
-            if (text) this.callbacks.onAssistantTextDone?.(text);
+            if (text) {
+              this.assistantTextBuffer = text;
+              if (!this.assistantTextDoneEmitted && text !== this.lastAssistantTextDone) {
+                this.assistantTextDoneEmitted = true;
+                this.lastAssistantTextDone = text;
+                this.callbacks.onAssistantTextDone?.(text);
+              }
+            }
           }
         }
       }
@@ -416,6 +483,17 @@ export class VoiceLiveClient {
 
       if (type === "response.done") {
         this.usage.turns += 1;
+
+        // If the response was audio-only, we may only have transcript deltas.
+        if (!this.assistantTextDoneEmitted && this.assistantTextBuffer.trim()) {
+          const text = this.assistantTextBuffer.trim();
+          if (text !== this.lastAssistantTextDone) {
+            this.lastAssistantTextDone = text;
+            this.callbacks.onAssistantTextDone?.(text);
+          }
+          this.assistantTextDoneEmitted = true;
+        }
+
         const response = asRecord(r.response);
         const usage = response ? asRecord(response.usage) : null;
         if (usage) {
@@ -505,6 +583,10 @@ export class VoiceLiveClient {
       const buffer = e.data as ArrayBuffer;
       const pcm16Bytes = new Uint8Array(buffer);
       this.wire.audioSentBytes += pcm16Bytes.byteLength;
+
+      // NOTE: Do not cancel on any mic audio chunk. That can interrupt assistant playback
+      // due to continuous low-level noise/echo. We rely on server-side VAD speech_started
+      // (and explicit input_audio_buffer.speech_started) for barge-in.
 
       const b64 = bytesToBase64(pcm16Bytes);
       this.send({ type: "input_audio_buffer.append", audio: b64 });

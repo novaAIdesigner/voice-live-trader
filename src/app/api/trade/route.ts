@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import type { TradeOrderRequest, TradeOrderResponse } from "@/lib/trade/types";
+import type { CurrencyCode, TradeOrderRequest } from "@/lib/trade/types";
+import { placeOrder } from "@/lib/trade/engine";
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
@@ -22,8 +23,8 @@ function validate(body: unknown):
   const side = obj.side;
   const orderType = obj.orderType;
 
-  if (!isNonEmptyString(productType) || !["stock", "bond", "fund"].includes(productType)) {
-    return { ok: false, error: "productType must be one of stock|bond|fund" };
+  if (!isNonEmptyString(productType) || !["stock", "bond", "fund", "option", "crypto"].includes(productType)) {
+    return { ok: false, error: "productType must be one of stock|bond|fund|option|crypto" };
   }
 
   if (!isNonEmptyString(side) || !["buy", "sell"].includes(side)) {
@@ -47,6 +48,9 @@ function validate(body: unknown):
   }
 
   if (isNonEmptyString(obj.currency) && obj.currency.length > 8) warnings.push("currency looks unusually long; please confirm");
+  if (isNonEmptyString(obj.currency) && !["USD", "JPY", "CNY"].includes(obj.currency.trim().toUpperCase())) {
+    return { ok: false, error: "currency must be one of USD|JPY|CNY" };
+  }
 
   const order: TradeOrderRequest = {
     productType: productType as TradeOrderRequest["productType"],
@@ -55,7 +59,7 @@ function validate(body: unknown):
     quantity: obj.quantity as number,
     orderType: orderType as TradeOrderRequest["orderType"],
     limitPrice: orderType === "limit" ? (obj.limitPrice as number) : undefined,
-    currency: isNonEmptyString(obj.currency) ? obj.currency.trim() : undefined,
+    currency: isNonEmptyString(obj.currency) ? (obj.currency.trim().toUpperCase() as CurrencyCode) : undefined,
     timeInForce:
       isNonEmptyString(obj.timeInForce) && ["day", "gtc"].includes(obj.timeInForce)
         ? (obj.timeInForce as "day" | "gtc")
@@ -71,7 +75,16 @@ function validate(body: unknown):
 
 function summarize(order: TradeOrderRequest) {
   const sideZh = order.side === "buy" ? "买入" : "卖出";
-  const productZh = order.productType === "stock" ? "股票" : order.productType === "bond" ? "债券" : "基金";
+  const productZh =
+    order.productType === "stock"
+      ? "股票"
+      : order.productType === "bond"
+        ? "债券"
+        : order.productType === "fund"
+          ? "基金"
+          : order.productType === "option"
+            ? "期权"
+            : "数字货币";
   const pricePart = order.orderType === "limit" ? `限价 ${order.limitPrice}` : "市价";
   const cur = order.currency ? ` ${order.currency}` : "";
   return `${sideZh} ${order.quantity} ${productZh} ${order.symbol}（${pricePart}${cur}）`;
@@ -82,17 +95,17 @@ export async function POST(req: Request) {
   const v = validate(body);
   if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 });
 
-  const orderId = `ord_${crypto.randomUUID()}`;
-  const receivedAt = new Date().toISOString();
+  // Engine will decide rejected/pending/filled and apply balances / positions.
+  const res = placeOrder(v.order);
 
-  const response: TradeOrderResponse = {
-    orderId,
-    receivedAt,
-    status: "submitted",
-    summary: `已提交订单：${summarize(v.order)}；订单号 ${orderId}`,
-    order: v.order,
-    warnings: v.warnings.length ? v.warnings : undefined,
-  };
+  // Keep existing neutral warning behavior.
+  if (v.warnings.length && !res.warnings?.length) res.warnings = v.warnings;
+  if (v.warnings.length && res.warnings?.length) res.warnings = Array.from(new Set([...res.warnings, ...v.warnings]));
 
-  return NextResponse.json(response);
+  // Preserve old summarization fallback if engine summary is empty.
+  if (!res.summary) {
+    res.summary = `已提交订单：${summarize(v.order)}`;
+  }
+
+  return NextResponse.json(res, { status: res.status === "rejected" ? 400 : 200 });
 }
