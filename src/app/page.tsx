@@ -52,13 +52,25 @@ export default function Home() {
   const [micOn, setMicOn] = useState(false);
 
   const [usage, setUsage] = useState<UsageTotals>({
+    turns: 0,
     totalTokens: 0,
     inputTokens: 0,
     outputTokens: 0,
     inputTextTokens: 0,
     inputAudioTokens: 0,
+    inputTextCachedTokens: 0,
+    inputAudioCachedTokens: 0,
+    inputCachedTokens: 0,
     outputTextTokens: 0,
     outputAudioTokens: 0,
+    outputTextCachedTokens: 0,
+    outputAudioCachedTokens: 0,
+    outputCachedTokens: 0,
+
+    speechEndToFirstResponseMsMin: 0,
+    speechEndToFirstResponseMsAvg: 0,
+    speechEndToFirstResponseMsP90: 0,
+    speechEndToFirstResponseCount: 0,
   });
   const [wire, setWire] = useState<WireStats>({
     wsSentBytes: 0,
