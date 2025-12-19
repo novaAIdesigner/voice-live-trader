@@ -4,14 +4,20 @@
 - 连接配置（Voice Live WebSocket）
 - 用量统计（tokens/音频/网络字节）
 - Chat 窗口（文本 + 可选麦克风语音）
-- 交易表单（提交到后台 API）
+- 交易表单（纯前端模拟撮合引擎，纯客户端）
 
 ## GitHub Pages 部署
 
 本项目已配置为静态导出并通过 GitHub Actions 发布到 GitHub Pages（见 `.github/workflows/deploy.yml`）。
 
-注意：GitHub Pages 是静态托管，无法运行 Next.js 的 `/api/*` 路由。
-因此在 `github.io` 域名下运行时，页面会自动切换为“前端内存撮合引擎”以保证演示可用。
+本项目为纯前端演示（无 `/api/*` 路由），可直接静态导出并部署到 Pages。
+
+如果你在 Actions 里看到类似报错：
+`Branch "master" is not allowed to deploy to github-pages due to environment protection rules.`
+说明仓库里设置了 `github-pages` 环境保护规则（只允许某些分支部署）。
+解决方式二选一：
+- 在 GitHub 仓库 `Settings -> Environments -> github-pages` 里把 `master` 加入允许部署的分支；或
+- 把默认分支切换为 `main` 并相应调整 workflow 触发分支。
 
 ## 运行
 
@@ -30,15 +36,11 @@ npm run dev
 - `API Key`
 
 然后点击“连接”。连接成功后：
-- Chat 输入交易需求，Agent 会在需要时通过 `place_order` 工具调用 `/api/trade` 下单，并用中性语气向你确认。
+- Chat 输入交易需求，Agent 会在需要时通过工具调用前端模拟撮合引擎下单，并用中性语气向你确认。
 - 点击“开启麦克风”可把语音流发送到 Voice Live（PCM16 24kHz）。
 
 注意：浏览器环境无法设置 WebSocket Header，所以此项目使用 `api-key` 作为 URL query 参数连接（通过 `wss://...&api-key=...`）。
 
-## 后台下单 API
+## 交易引擎
 
-- `POST /api/trade`
-	- 入参：`src/lib/trade/types.ts` 的 `TradeOrderRequest`
-	- 出参：`TradeOrderResponse`
-
-本项目的 `/api/trade` 目前为示例实现（校验 + 返回订单号），你可以在这里接入真实券商/交易系统。
+本项目内置前端模拟撮合引擎（`src/lib/trade/engine.ts`），账户与订单状态仅存在于客户端内存中；刷新页面会重置。

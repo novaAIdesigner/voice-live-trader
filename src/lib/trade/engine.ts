@@ -28,13 +28,6 @@ type EngineState = {
   fillTimers: Map<string, ReturnType<typeof setTimeout>>;
 };
 
-type PersistedStateV1 = {
-  v: 1;
-  balances: Partial<Record<CurrencyCode, BalanceState>>;
-  assets: AssetPosition[];
-  orders: OrderRecord[];
-};
-
 function nowIso() {
   return new Date().toISOString();
 }
@@ -224,84 +217,7 @@ function createInitialState(): EngineState {
 }
 
 let STATE: EngineState | null = null;
-
-const STORAGE_KEY = "vlt_engine_state_v1";
 const listeners = new Set<(snap: AccountSnapshot) => void>();
-
-function canUseLocalStorage() {
-  try {
-    return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
-  } catch {
-    return false;
-  }
-}
-
-function persistState(s0?: EngineState) {
-  if (!canUseLocalStorage()) return;
-
-  try {
-    const s = s0 ?? state();
-    const payload: PersistedStateV1 = {
-      v: 1,
-      balances: s.balances,
-      assets: Array.from(s.assets.values()).map((p) => ({ ...p })),
-      orders: Array.from(s.orders.values()).map((o) => ({ ...o })),
-    };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  } catch {
-    // ignore
-  }
-}
-
-function loadStateFromStorage(): EngineState | null {
-  if (!canUseLocalStorage()) return null;
-
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as PersistedStateV1;
-    if (!parsed || typeof parsed !== "object" || parsed.v !== 1) return null;
-
-    const base = createInitialState();
-
-    // Rehydrate balances (ensure all keys exist).
-    for (const ccy of Object.keys(base.balances) as CurrencyCode[]) {
-      const b = parsed.balances?.[ccy];
-      if (!b || typeof b !== "object") continue;
-      if (typeof b.available === "number" && Number.isFinite(b.available)) base.balances[ccy].available = b.available;
-      if (typeof b.reserved === "number" && Number.isFinite(b.reserved)) base.balances[ccy].reserved = b.reserved;
-    }
-
-    // Rehydrate assets
-    base.assets = new Map();
-    if (Array.isArray(parsed.assets)) {
-      for (const p of parsed.assets) {
-        if (!p || typeof p !== "object") continue;
-        const productType = (p as AssetPosition).productType;
-        const symbol = (p as AssetPosition).symbol;
-        const currency = (p as AssetPosition).currency;
-        if (!productType || !symbol || !currency) continue;
-        base.assets.set(assetKey(productType, symbol, currency), { ...(p as AssetPosition) });
-      }
-    }
-
-    // Rehydrate orders
-    base.orders = new Map();
-    if (Array.isArray(parsed.orders)) {
-      for (const o of parsed.orders) {
-        if (!o || typeof o !== "object") continue;
-        const orderId = (o as OrderRecord).orderId;
-        if (!orderId || typeof orderId !== "string") continue;
-        base.orders.set(orderId, { ...(o as OrderRecord) });
-      }
-    }
-
-    base.fillTimers = new Map();
-    return base;
-  } catch {
-    return null;
-  }
-}
 
 function notify(snap: AccountSnapshot) {
   if (!listeners.size) return;
@@ -312,13 +228,6 @@ function notify(snap: AccountSnapshot) {
       // ignore
     }
   }
-}
-
-function persistAndNotify() {
-  const snap = snapshot();
-  persistState();
-  notify(snap);
-  return snap;
 }
 
 function scheduleFillIfNeeded(orderId: string) {
@@ -333,7 +242,7 @@ function scheduleFillIfNeeded(orderId: string) {
   const timer = setTimeout(() => {
     try {
       applyFill(orderId, round2(limitPx));
-      persistAndNotify();
+      notify(snapshot());
     } catch {
       // ignore
     }
@@ -355,14 +264,8 @@ export function subscribeAccountSnapshot(listener: (snap: AccountSnapshot) => vo
 
 function state(): EngineState {
   if (!STATE) {
-    const loaded = loadStateFromStorage();
-    STATE = loaded ?? createInitialState();
-    // Persist the initial seed so the account stays stable across reloads.
-    if (!loaded) persistState(STATE);
-    // Re-schedule any pending limit-order fills after reload.
-    for (const o of STATE.orders.values()) {
-      if (o.status === "pending" && o.orderType === "limit") scheduleFillIfNeeded(o.orderId);
-    }
+    // No persistence: every page refresh resets the demo account.
+    STATE = createInitialState();
   }
   return STATE;
 }
@@ -619,7 +522,6 @@ export function adjustBalance(req: BalanceAdjustRequest): BalanceAdjustResponse 
     }
     bal.available = round2(bal.available - withdraw);
     const snap = snapshot();
-    persistState();
     notify(snap);
     return { ok: true, asOf, snapshot: snap };
   }
@@ -627,7 +529,6 @@ export function adjustBalance(req: BalanceAdjustRequest): BalanceAdjustResponse 
   // deposit
   bal.available = round2(bal.available + amount);
   const snap = snapshot();
-  persistState();
   notify(snap);
   return { ok: true, asOf, snapshot: snap };
 }
@@ -664,7 +565,6 @@ export function convertCurrency(req: FxConvertRequest): FxConvertResponse {
   s.balances[req.to].available = roundByCcy(req.to, s.balances[req.to].available + credited);
 
   const snap = snapshot();
-  persistState();
   notify(snap);
   return { ok: true, asOf, rate, debited: amount, credited, snapshot: snap };
 }
@@ -704,7 +604,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
     if (base !== "BTC" && base !== "ETH" && base !== "USDT" && base !== "USDC") {
       record.status = "rejected";
       s.orders.set(orderId, record);
-      persistState();
       notify(snapshot());
       return {
         orderId,
@@ -729,7 +628,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
         if (b.available < value) {
           record.status = "rejected";
           s.orders.set(orderId, record);
-          persistState();
           notify(snapshot());
           return {
             orderId,
@@ -748,7 +646,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
         if (coin.available < qty) {
           record.status = "rejected";
           s.orders.set(orderId, record);
-          persistState();
           notify(snapshot());
           return {
             orderId,
@@ -769,8 +666,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
       record.fillValue = value;
       record.updatedAt = nowIso();
       s.orders.set(orderId, record);
-
-      persistState();
       notify(snapshot());
 
       return {
@@ -791,7 +686,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
       if (b.available < value) {
         record.status = "rejected";
         s.orders.set(orderId, record);
-        persistState();
         notify(snapshot());
         return {
           orderId,
@@ -831,7 +725,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
       if (!pos || pos.quantity < qty) {
         record.status = "rejected";
         s.orders.set(orderId, record);
-        persistState();
         notify(snapshot());
         return {
           orderId,
@@ -856,8 +749,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
     record.fillValue = value;
     record.updatedAt = nowIso();
     s.orders.set(orderId, record);
-
-    persistState();
     notify(snapshot());
 
     return {
@@ -878,7 +769,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
   if (!Number.isFinite(limitPx) || limitPx <= 0) {
     record.status = "rejected";
     s.orders.set(orderId, record);
-    persistState();
     notify(snapshot());
     return {
       orderId,
@@ -897,7 +787,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
     if (b.available < reserveValue) {
       record.status = "rejected";
       s.orders.set(orderId, record);
-      persistState();
       notify(snapshot());
       return {
         orderId,
@@ -919,7 +808,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
       if (coin.available < qty) {
         record.status = "rejected";
         s.orders.set(orderId, record);
-        persistState();
         notify(snapshot());
         return {
           orderId,
@@ -939,7 +827,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
       if (!pos || pos.quantity < qty) {
         record.status = "rejected";
         s.orders.set(orderId, record);
-        persistState();
         notify(snapshot());
         return {
           orderId,
@@ -966,8 +853,6 @@ export function placeOrder(orderReq: TradeOrderRequest): TradeOrderResponse {
   s.orders.set(orderId, record);
 
   scheduleFillIfNeeded(orderId);
-
-  persistState();
   notify(snapshot());
 
   return {
@@ -1001,7 +886,6 @@ export function cancelOrder(orderId: string): CancelOrderResponse {
   const updated = setOrderStatus(orderId, "canceled");
 
   const snap = snapshot();
-  persistState();
   notify(snap);
   return { ok: true, asOf, order: { ...updated }, snapshot: snap };
 }
@@ -1119,7 +1003,6 @@ export function modifyOrder(orderId: string, patch: ModifyOrderRequest): ModifyO
     s.orders.set(orderId, order);
 
     const snap = snapshot();
-    persistState();
     notify(snap);
     return { ok: true, asOf, order: { ...order }, snapshot: snap };
   } catch (e) {
