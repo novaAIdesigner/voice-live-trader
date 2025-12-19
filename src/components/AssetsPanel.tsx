@@ -1,10 +1,34 @@
 "use client";
 
 import type { AssetPosition } from "@/lib/trade/types";
+import { useFlashOnChange } from "@/lib/hooks";
 
 type Props = {
   assets: AssetPosition[];
 };
+
+function AssetCard({ p }: { p: AssetPosition }) {
+  const flash = useFlashOnChange(p.quantity);
+  const h = "flash-3s";
+
+  return (
+    <div
+      className={`rounded-md border border-black/10 bg-zinc-50 p-3 text-sm text-zinc-900 dark:border-white/15 dark:bg-black dark:text-zinc-100${
+        flash ? " " + h : ""
+      }`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-medium">
+          {p.productType} {p.symbol}
+        </div>
+        <div className="text-xs text-zinc-600 dark:text-zinc-400">{p.currency}</div>
+      </div>
+      <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+        数量 {p.quantity} · 均价 {p.avgCost}
+      </div>
+    </div>
+  );
+}
 
 export function AssetsPanel({ assets }: Props) {
   return (
@@ -18,20 +42,7 @@ export function AssetsPanel({ assets }: Props) {
         {assets.length === 0 ? <div className="text-sm text-zinc-600 dark:text-zinc-400">暂无持仓</div> : null}
 
         {assets.map((p) => (
-          <div
-            key={p.id}
-            className="rounded-md border border-black/10 bg-zinc-50 p-3 text-sm text-zinc-900 dark:border-white/15 dark:bg-black dark:text-zinc-100"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div className="font-medium">
-                {p.productType} {p.symbol}
-              </div>
-              <div className="text-xs text-zinc-600 dark:text-zinc-400">{p.currency}</div>
-            </div>
-            <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-              数量 {p.quantity} · 均价 {p.avgCost}
-            </div>
-          </div>
+          <AssetCard key={p.id} p={p} />
         ))}
       </div>
     </section>

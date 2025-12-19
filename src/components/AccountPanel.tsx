@@ -2,6 +2,7 @@
 
 import type { AccountBalance, CurrencyCode, FxConvertRequest, FxConvertResponse } from "@/lib/trade/types";
 import { useMemo, useState } from "react";
+import { useFlashOnChange } from "@/lib/hooks";
 
 type Props = {
   balances: AccountBalance[];
@@ -11,6 +12,27 @@ type Props = {
 
 const DISPLAY_CCYS: Array<"USD" | "JPY" | "CNY"> = ["USD", "JPY", "CNY"];
 const CONVERT_CCYS: CurrencyCode[] = ["USD", "JPY", "CNY"];
+
+function BalanceCard({ ccy, balance }: { ccy: CurrencyCode; balance?: AccountBalance }) {
+  const flash = useFlashOnChange(balance?.available);
+  const h = "flash-3s";
+
+  return (
+    <div
+      className={`rounded-md border border-black/10 bg-zinc-50 p-3 dark:border-white/15 dark:bg-black${
+        flash ? " " + h : ""
+      }`}
+    >
+      <div className="text-xs text-zinc-600 dark:text-zinc-400">{ccy}</div>
+      <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+        {balance ? balance.available.toLocaleString() : "0"}
+      </div>
+      <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">
+        预留：{balance ? balance.reserved.toLocaleString() : "0"}
+      </div>
+    </div>
+  );
+}
 
 export function AccountPanel({ balances, onConvert, onAdjust }: Props) {
   const [from, setFrom] = useState<CurrencyCode>("USD");
@@ -85,20 +107,9 @@ export function AccountPanel({ balances, onConvert, onAdjust }: Props) {
       </div>
 
       <div className="mt-3 grid grid-cols-3 gap-2">
-        {DISPLAY_CCYS.map((ccy) => {
-          const b = byCcy.get(ccy);
-          return (
-            <div key={ccy} className="rounded-md border border-black/10 bg-zinc-50 p-3 dark:border-white/15 dark:bg-black">
-              <div className="text-xs text-zinc-600 dark:text-zinc-400">{ccy}</div>
-              <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                {b ? b.available.toLocaleString() : "0"}
-              </div>
-              <div className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-400">
-                预留：{b ? b.reserved.toLocaleString() : "0"}
-              </div>
-            </div>
-          );
-        })}
+        {DISPLAY_CCYS.map((ccy) => (
+          <BalanceCard key={ccy} ccy={ccy} balance={byCcy.get(ccy)} />
+        ))}
       </div>
 
       <div className="mt-3 grid gap-2">

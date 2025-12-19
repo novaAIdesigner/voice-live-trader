@@ -46,6 +46,7 @@ import { VoiceLiveClient } from "@/lib/voiceLive/VoiceLiveClient";
 import type { UsageTotals, VoiceLiveConnectionConfig, WireStats } from "@/lib/voiceLive/types";
 import { deleteCookie, getCookie, setCookie } from "@/lib/cookies";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useFlashOnChange } from "@/lib/hooks";
 
 type TradeTicket = {
   id: string;
@@ -88,28 +89,6 @@ function canSubmitOrder(order: TradeOrderRequest, disabled?: boolean) {
     if (!Number.isFinite(order.limitPrice) || (order.limitPrice ?? 0) <= 0) return false;
   }
   return true;
-}
-
-function useFlashOnChange<T>(value: T, ms = 3000) {
-  const prev = useRef<T>(value);
-  const [on, setOn] = useState(false);
-
-  useEffect(() => {
-    if (Object.is(prev.current, value)) return;
-    prev.current = value;
-
-    const t0 = window.setTimeout(() => setOn(false), 0);
-    const t1 = window.setTimeout(() => setOn(true), 10);
-    const t2 = window.setTimeout(() => setOn(false), ms);
-
-    return () => {
-      window.clearTimeout(t0);
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
-    };
-  }, [value, ms]);
-
-  return on;
 }
 
 const defaultConfig: VoiceLiveConnectionConfig = {
@@ -694,7 +673,7 @@ export default function Home() {
               collapsed: true,
               lastResponse: trade,
             },
-            ...prev,
+            ...prev.filter((t) => t.frozen),
           ]);
           try {
             const snap = await fetchAccount();
