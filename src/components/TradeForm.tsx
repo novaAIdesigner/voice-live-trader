@@ -2,6 +2,7 @@
 
 import type { CurrencyCode, TradeOrderRequest, TradeProductType } from "@/lib/trade/types";
 import { useFlashOnChange } from "@/lib/hooks";
+import { memo } from "react";
 
 type Props = {
   order: TradeOrderRequest;
@@ -29,7 +30,7 @@ export const PRODUCT_LABEL: Record<TradeProductType, string> = {
 
 const CURRENCIES: CurrencyCode[] = ["USD", "JPY", "CNY"];
 
-export function TradeForm({ order, onOrderChange, disabled }: Props) {
+export const TradeForm = memo(function TradeForm({ order, onOrderChange, disabled }: Props) {
   const limitNeeded = order.orderType === "limit";
 
   const flashSide = useFlashOnChange(order.side);
@@ -229,4 +230,4 @@ export function TradeForm({ order, onOrderChange, disabled }: Props) {
         </label>
     </div>
   );
-}
+});

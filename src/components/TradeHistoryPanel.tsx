@@ -1,6 +1,7 @@
 "use client";
 
 import type { TradeOrderResponse } from "@/lib/trade/types";
+import { memo } from "react";
 
 export type TradeHistoryItem = {
   id: string;
@@ -13,7 +14,7 @@ type Props = {
   items: TradeHistoryItem[];
 };
 
-export function TradeHistoryPanel({ items }: Props) {
+export const TradeHistoryPanel = memo(function TradeHistoryPanel({ items }: Props) {
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
@@ -40,4 +41,4 @@ export function TradeHistoryPanel({ items }: Props) {
       </div>
     </section>
   );
-}
+});

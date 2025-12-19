@@ -45,41 +45,10 @@ import {
 import { VoiceLiveClient } from "@/lib/voiceLive/VoiceLiveClient";
 import type { UsageTotals, VoiceLiveConnectionConfig, WireStats } from "@/lib/voiceLive/types";
 import { deleteCookie, getCookie, setCookie } from "@/lib/cookies";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { TicketCard } from "@/components/TicketCard";
+import { TradeTicket } from "@/lib/trade/ticket";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useFlashOnChange } from "@/lib/hooks";
-
-type TradeTicket = {
-  id: string;
-  order: TradeOrderRequest;
-  frozen: boolean;
-  collapsed: boolean;
-  lastResponse?: TradeOrderResponse;
-};
-
-function statusLabel(s: TradeOrderResponse["status"]) {
-  if (s === "filled") return "已成交";
-  if (s === "pending") return "待成交";
-  if (s === "canceled") return "已取消";
-  return "已拒绝";
-}
-
-function statusClass(s: TradeOrderResponse["status"]) {
-  if (s === "filled") return "text-emerald-600 dark:text-emerald-400";
-  if (s === "pending") return "text-amber-600 dark:text-amber-400";
-  if (s === "canceled") return "text-zinc-600 dark:text-zinc-400";
-  return "text-red-600";
-}
-
-function fmtIsoShort(s: string | undefined) {
-  if (!s) return "";
-  // ISO like 2025-12-19T12:34:56.789Z -> 2025-12-19 12:34:56
-  return s.replace("T", " ").slice(0, 19);
-}
-
-function fmtNum(n: number | undefined, digits = 2) {
-  if (typeof n !== "number" || !Number.isFinite(n)) return "";
-  return n.toFixed(digits);
-}
 
 function canSubmitOrder(order: TradeOrderRequest, disabled?: boolean) {
   if (disabled) return false;
@@ -205,6 +174,12 @@ export default function Home() {
 
   const [account, setAccount] = useState<AccountSnapshot | null>(null);
 
+  const ticketsRef = useRef(tickets);
+  useEffect(() => { ticketsRef.current = tickets; }, [tickets]);
+
+  const configRef = useRef(config);
+  useEffect(() => { configRef.current = config; }, [config]);
+
   const audioLogRef = useRef({ lastTs: 0, lastAudioIn: 0, lastAudioOut: 0 });
 
   useEffect(() => {
@@ -304,10 +279,11 @@ export default function Home() {
     return ts.find((t) => !t.frozen)?.id;
   }
 
-  async function connect() {
+  const connect = useCallback(async () => {
     if (connectDisabled) return;
     setChatError(null);
 
+    const config = configRef.current;
     logSystem(`连接中：${config.resourceHost} / ${config.model}`);
 
     const client = new VoiceLiveClient({
@@ -700,7 +676,7 @@ export default function Home() {
           logSystem(`❌ 错误：${m}`);
         },
         onServerEvent: (event) => {
-          if (config.enableAudioLogging) {
+          if (configRef.current.enableAudioLogging) {
             const t = event.type;
             if (t === "input_audio_buffer.speech_started" || t === "input_audio_buffer_speech_started") {
               logSystem("🎤 speech_started（barge-in）");
@@ -770,9 +746,9 @@ export default function Home() {
 
     clientRef.current = client;
     await client.connect(config);
-  }
+  }, [connectDisabled]);
 
-  function disconnect() {
+  const disconnect = useCallback(() => {
     try {
       clientRef.current?.disconnect();
     } finally {
@@ -783,9 +759,9 @@ export default function Home() {
       setStatus("disconnected");
       logSystem("⛔ 已断开");
     }
-  }
+  }, []);
 
-  async function toggleMic() {
+  const toggleMic = useCallback(async () => {
     const client = clientRef.current;
     if (!client) return;
 
@@ -800,7 +776,7 @@ export default function Home() {
     } catch (e) {
       setChatError(e instanceof Error ? e.message : String(e));
     }
-  }
+  }, [micOn]);
 
   const visibleMessages = useMemo(() => {
     if (!assistantStreaming) return messages;
@@ -815,8 +791,8 @@ export default function Home() {
     ];
   }, [messages, assistantStreaming, assistantStreamingTs]);
 
-  async function submitTicket(ticketId: string) {
-    const t = tickets.find((x) => x.id === ticketId);
+  const submitTicket = useCallback(async (ticketId: string) => {
+    const t = ticketsRef.current.find((x) => x.id === ticketId);
     if (!t || t.frozen) return;
     if (!canSubmitOrder(t.order)) return;
 
@@ -837,151 +813,45 @@ export default function Home() {
       setChatError(msg);
       logSystem(`❌ 下单失败：${msg}`);
     }
-  }
+  }, []);
 
-  function deleteTicket(ticketId: string) {
+  const deleteTicket = useCallback((ticketId: string) => {
     setTickets((prev) => prev.filter((x) => x.id !== ticketId));
-  }
+  }, []);
 
-  function TicketCard({ t, idx }: { t: TradeTicket; idx: number }) {
-    const label = `#${idx + 1}`;
-    const resp = t.lastResponse;
-
-    const flashProduct = useFlashOnChange(t.order.productType);
-    const flashStatus = useFlashOnChange(resp?.status ?? "");
-    const canSubmit = canSubmitOrder(t.order);
-    const flashSubmit = useFlashOnChange(canSubmit);
-
-    if (t.frozen && resp) {
-      const filledAt = fmtIsoShort(resp.filledAt);
-      const receivedAt = fmtIsoShort(resp.receivedAt);
-      const fillPrice = fmtNum(resp.fillPrice, 4) || fmtNum(resp.fillPrice, 2);
-      const fillValue = fmtNum(resp.fillValue, 2);
-
-      return (
-        <div className="rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <div className="text-xs text-zinc-500">{label}</div>
-                <div className={`text-xs font-semibold ${statusClass(resp.status)}${flashStatus ? " flash-3s" : ""}`}
-                >
-                  {statusLabel(resp.status)}
-                </div>
-                <div className="text-xs text-zinc-500">订单号 {resp.orderId}</div>
-              </div>
-              <div className="mt-0.5 truncate font-medium">{resp.summary}</div>
-
-              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
-                {resp.status === "filled" ? (
-                  <>
-                    {filledAt ? <span>成交时间 {filledAt}</span> : null}
-                    {fillPrice ? <span>成交价 {fillPrice}</span> : null}
-                    {fillValue ? <span>成交额 {fillValue} {resp.order.currency ?? ""}</span> : null}
-                  </>
-                ) : (
-                  <>{receivedAt ? <span>提交时间 {receivedAt}</span> : null}</>
-                )}
-              </div>
-            </div>
-
-            <button
-              className="h-8 shrink-0 rounded-md border border-border bg-transparent px-3 text-xs font-medium text-foreground hover:bg-black/5 dark:hover:bg-white/5"
-              onClick={() => setTickets((prev) => prev.map((x) => (x.id === t.id ? { ...x, collapsed: !x.collapsed } : x)))}
-            >
-              {t.collapsed ? "详情" : "收起"}
-            </button>
-          </div>
-
-          {!t.collapsed ? (
-            <div className="mt-3">
-              <TradeForm
-                order={t.order}
-                disabled
-                onOrderChange={() => {
-                  // frozen
-                }}
-              />
-            </div>
-          ) : null}
-        </div>
-      );
-    }
-
-    if (t.frozen && !resp) {
-      return (
-        <div className="rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-xs text-zinc-500">{label}</div>
-              <div className="mt-0.5 truncate font-medium">已提交订单</div>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="rounded-md border border-border bg-background px-3 py-2">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="text-xs text-zinc-500">{label}</div>
-              <div className="text-xs font-semibold text-foreground">填写中</div>
-              <select
-                className={
-                  "h-8 rounded-md border border-border bg-transparent px-2 text-xs text-foreground outline-none" +
-                  (flashProduct ? " flash-3s" : "")
-                }
-                value={t.order.productType}
-                onChange={(e) =>
-                  setTickets((prev) =>
-                    prev.map((x) =>
-                      x.id === t.id
-                        ? { ...x, order: { ...x.order, productType: e.target.value as TradeOrderRequest["productType"] } }
-                        : x
-                    )
-                  )
-                }
-              >
-                {(Object.keys(PRODUCT_LABEL) as Array<keyof typeof PRODUCT_LABEL>).map((pt) => (
-                  <option key={pt} value={pt}>
-                    {PRODUCT_LABEL[pt]}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              className={
-                "h-8 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50" +
-                (flashSubmit ? " flash-3s" : "")
-              }
-              disabled={!canSubmit}
-              onClick={() => void submitTicket(t.id)}
-            >
-              提交
-            </button>
-            <button
-              className="h-8 rounded-md border border-border bg-transparent px-3 text-xs font-medium text-foreground hover:bg-black/5 dark:hover:bg-white/5"
-              onClick={() => deleteTicket(t.id)}
-            >
-              删除
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-3">
-          <TradeForm
-            order={t.order}
-            onOrderChange={(next) => setTickets((prev) => prev.map((x) => (x.id === t.id ? { ...x, order: next } : x)))}
-          />
-        </div>
-      </div>
+  const updateOrder = useCallback((ticketId: string, updates: Partial<TradeOrderRequest>) => {
+    setTickets((prev) =>
+      prev.map((t) => {
+        if (t.id !== ticketId) return t;
+        return { ...t, order: { ...t.order, ...updates } };
+      })
     );
-  }
+  }, []);
+
+  const toggleCollapse = useCallback((ticketId: string) => {
+    setTickets((prev) =>
+      prev.map((t) => {
+        if (t.id !== ticketId) return t;
+        return { ...t, collapsed: !t.collapsed };
+      })
+    );
+  }, []);
+
+  const handleConvert = useCallback(async (req: FxConvertRequest) => {
+    const res = await postFxConvert(req);
+    if (res.snapshot) setAccount(res.snapshot);
+    return res;
+  }, []);
+
+  const handleAdjust = useCallback(async (req: BalanceAdjustRequest) => {
+    const res = await postBalanceAdjust(req);
+    if (res.snapshot) setAccount(res.snapshot);
+    return { ok: res.ok, error: res.error };
+  }, []);
+
+  const handleCreateTicket = useCallback(() => {
+    setTickets((prev) => [{ id: newId("ticket"), order: defaultOrder, frozen: false, collapsed: true }, ...prev]);
+  }, []);
 
   return (
     <div className="min-h-screen bg-background font-sans text-foreground">
@@ -994,6 +864,7 @@ export default function Home() {
               width={120}
               height={28}
               className="h-7 w-auto"
+              style={{ width: "auto" }}
               priority
             />
             <div className="min-w-0">
@@ -1018,7 +889,7 @@ export default function Home() {
         <div className="flex flex-col gap-4 lg:h-[calc(100vh-140px)] lg:overflow-hidden lg:pr-1">
           <ConnectionPanel
             config={config}
-            onChange={(next) => setConfig(next)}
+            onChange={setConfig}
             status={status}
             micOn={micOn}
             onConnect={connect}
@@ -1028,16 +899,8 @@ export default function Home() {
 
           <AccountPanel
             balances={(account?.balances ?? []).filter((b) => b.currency === "USD" || b.currency === "JPY" || b.currency === "CNY")}
-            onConvert={async (req) => {
-              const res = await postFxConvert(req);
-              if (res.snapshot) setAccount(res.snapshot);
-              return res;
-            }}
-            onAdjust={async (req) => {
-              const res = await postBalanceAdjust(req);
-              if (res.snapshot) setAccount(res.snapshot);
-              return { ok: res.ok, error: res.error };
-            }}
+            onConvert={handleConvert}
+            onAdjust={handleAdjust}
           />
 
           <div className="min-h-0 flex-1">
@@ -1051,9 +914,7 @@ export default function Home() {
               <h2 className="text-sm font-semibold text-foreground">交易窗口</h2>
               <button
                 className="h-9 rounded-md border border-border bg-transparent px-3 text-xs font-medium text-foreground hover:bg-black/5 dark:hover:bg-white/5"
-                onClick={() =>
-                  setTickets((prev) => [{ id: newId("ticket"), order: defaultOrder, frozen: false, collapsed: true }, ...prev])
-                }
+                onClick={handleCreateTicket}
               >
                 新建订单
               </button>
@@ -1061,7 +922,15 @@ export default function Home() {
 
             <div className="mt-3 space-y-3">
               {tickets.map((t, idx) => (
-                <TicketCard key={t.id} t={t} idx={idx} />
+                <TicketCard
+                  key={t.id}
+                  t={t}
+                  idx={idx}
+                  onUpdateOrder={updateOrder}
+                  onSubmit={submitTicket}
+                  onDelete={deleteTicket}
+                  onToggleCollapse={toggleCollapse}
+                />
               ))}
             </div>
           </section>

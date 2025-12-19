@@ -1,7 +1,7 @@
 "use client";
 
 import type { ModifyOrderRequest, OrderRecord } from "@/lib/trade/types";
-import { useMemo, useState } from "react";
+import { useMemo, useState, memo } from "react";
 
 type Props = {
   orders: OrderRecord[];
@@ -9,7 +9,7 @@ type Props = {
   onModify: (orderId: string, patch: ModifyOrderRequest) => Promise<void>;
 };
 
-export function OrdersPanel({ orders, onCancel, onModify }: Props) {
+export const OrdersPanel = memo(function OrdersPanel({ orders, onCancel, onModify }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [q, setQ] = useState<string>("");
   const [limit, setLimit] = useState<string>("");
@@ -158,4 +158,4 @@ export function OrdersPanel({ orders, onCancel, onModify }: Props) {
       </div>
     </section>
   );
-}
+});

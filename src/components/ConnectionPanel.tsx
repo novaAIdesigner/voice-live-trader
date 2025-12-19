@@ -2,6 +2,7 @@
 
 import type { VoiceLiveConnectionConfig, VoiceLiveVoice } from "@/lib/voiceLive/types";
 import { normalizeResourceHost } from "@/lib/voiceLive/normalize";
+import { memo } from "react";
 
 type Props = {
   config: VoiceLiveConnectionConfig;
@@ -17,7 +18,7 @@ function setVoice(config: VoiceLiveConnectionConfig, voice: VoiceLiveVoice): Voi
   return { ...config, voice };
 }
 
-export function ConnectionPanel({
+export const ConnectionPanel = memo(function ConnectionPanel({
   config,
   onChange,
   status,
@@ -49,7 +50,7 @@ export function ConnectionPanel({
         </label>
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-500">API Key</span>
+          <span className="text-xs text-zinc-500">API Key - <a href="https://ai.azure.com" target="_blank" rel="noopener noreferrer" className="underline">Get API Key/Endpoint Here 👈</a></span>
           <input
             className="h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none"
             value={config.apiKey}
@@ -192,4 +193,4 @@ export function ConnectionPanel({
       </div>
     </section>
   );
-}
+});

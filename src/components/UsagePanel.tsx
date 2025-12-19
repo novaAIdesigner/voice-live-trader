@@ -1,13 +1,14 @@
 "use client";
 
 import type { UsageTotals, WireStats } from "@/lib/voiceLive/types";
+import { memo } from "react";
 
 type Props = {
   usage: UsageTotals;
   wire: WireStats;
 };
 
-export function UsagePanel({ usage, wire }: Props) {
+export const UsagePanel = memo(function UsagePanel({ usage, wire }: Props) {
   const interactions = usage.turns + wire.toolCalls;
   return (
     <section className="rounded-lg border border-border bg-card px-4 py-3">
@@ -38,4 +39,4 @@ export function UsagePanel({ usage, wire }: Props) {
       </div>
     </section>
   );
-}
+});

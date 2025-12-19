@@ -16,8 +16,7 @@ export const metadata: Metadata = {
   title: "Azure Voice Live - Trader Agent",
   description: "Azure Voice Live trader agent web app",
   icons: {
-    icon: [{ url: "vite.svg", type: "image/svg+xml" }],
-    shortcut: ["vite.svg"],
+    icon: "/vite.svg",
   },
 };
 

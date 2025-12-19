@@ -2,6 +2,7 @@
 
 import type { AssetPosition } from "@/lib/trade/types";
 import { useFlashOnChange } from "@/lib/hooks";
+import { memo } from "react";
 
 type Props = {
   assets: AssetPosition[];
@@ -30,7 +31,7 @@ function AssetCard({ p }: { p: AssetPosition }) {
   );
 }
 
-export function AssetsPanel({ assets }: Props) {
+export const AssetsPanel = memo(function AssetsPanel({ assets }: Props) {
   return (
     <section className="flex h-full min-h-0 flex-col rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
@@ -47,4 +48,4 @@ export function AssetsPanel({ assets }: Props) {
       </div>
     </section>
   );
-}
+});

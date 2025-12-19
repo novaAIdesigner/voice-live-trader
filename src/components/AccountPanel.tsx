@@ -1,7 +1,7 @@
 "use client";
 
 import type { AccountBalance, CurrencyCode, FxConvertRequest, FxConvertResponse } from "@/lib/trade/types";
-import { useMemo, useState } from "react";
+import { useMemo, useState, memo } from "react";
 import { useFlashOnChange } from "@/lib/hooks";
 
 type Props = {
@@ -34,7 +34,7 @@ function BalanceCard({ ccy, balance }: { ccy: CurrencyCode; balance?: AccountBal
   );
 }
 
-export function AccountPanel({ balances, onConvert, onAdjust }: Props) {
+export const AccountPanel = memo(function AccountPanel({ balances, onConvert, onAdjust }: Props) {
   const [from, setFrom] = useState<CurrencyCode>("USD");
   const [to, setTo] = useState<CurrencyCode>("CNY");
   const [amount, setAmount] = useState<string>("100");
@@ -206,4 +206,4 @@ export function AccountPanel({ balances, onConvert, onAdjust }: Props) {
       </div>
     </section>
   );
-}
+});

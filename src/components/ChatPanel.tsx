@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, memo } from "react";
 
 export type ChatMessage = {
   id: string;
@@ -27,7 +27,7 @@ function rolePillClass(role: ChatMessage["role"]) {
   return "bg-muted text-muted-foreground";
 }
 
-export function ChatPanel({ messages, error, fill }: Props) {
+export const ChatPanel = memo(function ChatPanel({ messages, error, fill }: Props) {
   const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -71,4 +71,4 @@ export function ChatPanel({ messages, error, fill }: Props) {
       </div>
     </section>
   );
-}
+});
