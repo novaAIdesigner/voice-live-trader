@@ -1,10 +1,11 @@
 "use client";
 
 import { memo } from "react";
-import { TradeForm, PRODUCT_LABEL } from "./TradeForm";
-import { TradeOrderRequest, TradeOrderResponse } from "@/lib/trade/types";
+import { TradeForm } from "./TradeForm";
+import { TradeOrderRequest, TradeOrderResponse, TradeProductType } from "@/lib/trade/types";
 import { TradeTicket } from "@/lib/trade/ticket";
 import { useFlashOnChange } from "@/lib/hooks";
+import { useLanguage } from "@/lib/i18n";
 
 type Props = {
   t: TradeTicket;
@@ -14,13 +15,6 @@ type Props = {
   onSubmit: (id: string) => void;
   onDelete: (id: string) => void;
 };
-
-function statusLabel(s: TradeOrderResponse["status"]) {
-  if (s === "filled") return "已成交";
-  if (s === "pending") return "待成交";
-  if (s === "canceled") return "已取消";
-  return "已拒绝";
-}
 
 function statusClass(s: TradeOrderResponse["status"]) {
   if (s === "filled") return "text-emerald-600 dark:text-emerald-400";
@@ -48,27 +42,52 @@ function canSubmitOrder(order: TradeOrderRequest) {
   return true;
 }
 
+const PRODUCT_TYPES: TradeProductType[] = ["stock", "bond", "fund", "option", "crypto"];
+
 export const TicketCard = memo(function TicketCard({
-  t,
+  t: ticket,
   idx,
   onToggleCollapse,
   onUpdateOrder,
   onSubmit,
   onDelete,
 }: Props) {
+  const { t } = useLanguage();
   const label = `#${idx + 1}`;
-  const resp = t.lastResponse;
+  const resp = ticket.lastResponse;
 
-  const flashProduct = useFlashOnChange(t.order.productType);
+  const flashProduct = useFlashOnChange(ticket.order.productType);
   const flashStatus = useFlashOnChange(resp?.status ?? "");
-  const canSubmit = canSubmitOrder(t.order);
+  const canSubmit = canSubmitOrder(ticket.order);
   const flashSubmit = useFlashOnChange(canSubmit);
 
-  if (t.frozen && resp) {
+  const getStatusLabel = (s: TradeOrderResponse["status"]) => {
+    if (s === "filled") return t.status.filled;
+    if (s === "pending") return t.status.pending;
+    if (s === "canceled") return t.status.canceled;
+    return t.status.rejected;
+  };
+
+  if (ticket.frozen && resp) {
     const filledAt = fmtIsoShort(resp.filledAt);
     const receivedAt = fmtIsoShort(resp.receivedAt);
     const fillPrice = fmtNum(resp.fillPrice, 4) || fmtNum(resp.fillPrice, 2);
     const fillValue = fmtNum(resp.fillValue, 2);
+
+    const order = resp.order;
+    const sideLabel = order.side === "buy" ? t.buy : t.sell;
+    const productLabel = t.productType[order.productType] ?? order.productType;
+    const orderTypeLabel = order.orderType === "market" ? t.market : t.limit;
+    const qtyText = typeof order.quantity === "number" ? String(order.quantity) : "";
+    const limitText =
+      order.orderType === "limit" && typeof order.limitPrice === "number" && Number.isFinite(order.limitPrice)
+        ? ` @ ${fmtNum(order.limitPrice, 4) || fmtNum(order.limitPrice, 2)} ${order.currency ?? ""}`.trim()
+        : "";
+    const fillText =
+      resp.status === "filled" && fillPrice ? ` @ ${fillPrice} ${order.currency ?? ""}`.trim() : "";
+    const summaryText =
+      `${getStatusLabel(resp.status)} (${orderTypeLabel}): ${sideLabel} ${qtyText} ${productLabel} ${order.symbol}` +
+      (resp.status === "filled" ? fillText : limitText);
 
     return (
       <div className="rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground">
@@ -77,41 +96,41 @@ export const TicketCard = memo(function TicketCard({
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <div className="text-xs text-zinc-500">{label}</div>
               <div className={`text-xs font-semibold ${statusClass(resp.status)}${flashStatus ? " flash-3s" : ""}`}>
-                {statusLabel(resp.status)}
+                {getStatusLabel(resp.status)}
               </div>
-              <div className="text-xs text-zinc-500">订单号 {resp.orderId}</div>
+              <div className="text-xs text-zinc-500">{t.orderId} {resp.orderId}</div>
             </div>
-            <div className="mt-0.5 truncate font-medium">{resp.summary}</div>
+            <div className="mt-0.5 truncate font-medium">{summaryText}</div>
 
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
               {resp.status === "filled" ? (
                 <>
-                  {filledAt ? <span>成交时间 {filledAt}</span> : null}
-                  {fillPrice ? <span>成交价 {fillPrice}</span> : null}
+                  {filledAt ? <span>{t.filledAt} {filledAt}</span> : null}
+                  {fillPrice ? <span>{t.fillPrice} {fillPrice}</span> : null}
                   {fillValue ? (
                     <span>
-                      成交额 {fillValue} {resp.order.currency ?? ""}
+                      {t.fillValue} {fillValue} {resp.order.currency ?? ""}
                     </span>
                   ) : null}
                 </>
               ) : (
-                <>{receivedAt ? <span>提交时间 {receivedAt}</span> : null}</>
+                <>{receivedAt ? <span>{t.submittedAt} {receivedAt}</span> : null}</>
               )}
             </div>
           </div>
 
           <button
             className="h-8 shrink-0 rounded-md border border-border bg-transparent px-3 text-xs font-medium text-foreground hover:bg-black/5 dark:hover:bg-white/5"
-            onClick={() => onToggleCollapse(t.id)}
+            onClick={() => onToggleCollapse(ticket.id)}
           >
-            {t.collapsed ? "详情" : "收起"}
+            {ticket.collapsed ? t.details : t.collapse}
           </button>
         </div>
 
-        {!t.collapsed ? (
+        {!ticket.collapsed ? (
           <div className="mt-3">
             <TradeForm
-              order={t.order}
+              order={ticket.order}
               disabled
               onOrderChange={() => {
                 // frozen
@@ -123,13 +142,13 @@ export const TicketCard = memo(function TicketCard({
     );
   }
 
-  if (t.frozen && !resp) {
+  if (ticket.frozen && !resp) {
     return (
       <div className="rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xs text-zinc-500">{label}</div>
-            <div className="mt-0.5 truncate font-medium">已提交订单</div>
+            <div className="mt-0.5 truncate font-medium">{t.orderSubmitted}</div>
           </div>
         </div>
       </div>
@@ -142,20 +161,20 @@ export const TicketCard = memo(function TicketCard({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <div className="text-xs text-zinc-500">{label}</div>
-            <div className="text-xs font-semibold text-foreground">填写中</div>
+            <div className="text-xs font-semibold text-foreground">{t.filling}</div>
             <select
               className={
                 "h-8 rounded-md border border-border bg-transparent px-2 text-xs text-foreground outline-none" +
                 (flashProduct ? " flash-3s" : "")
               }
-              value={t.order.productType}
+              value={ticket.order.productType}
               onChange={(e) =>
-                onUpdateOrder(t.id, { ...t.order, productType: e.target.value as TradeOrderRequest["productType"] })
+                onUpdateOrder(ticket.id, { ...ticket.order, productType: e.target.value as TradeOrderRequest["productType"] })
               }
             >
-              {(Object.keys(PRODUCT_LABEL) as Array<keyof typeof PRODUCT_LABEL>).map((pt) => (
+              {PRODUCT_TYPES.map((pt) => (
                 <option key={pt} value={pt}>
-                  {PRODUCT_LABEL[pt]}
+                  {t.productType[pt]}
                 </option>
               ))}
             </select>
@@ -169,21 +188,21 @@ export const TicketCard = memo(function TicketCard({
               (flashSubmit ? " flash-3s" : "")
             }
             disabled={!canSubmit}
-            onClick={() => onSubmit(t.id)}
+            onClick={() => onSubmit(ticket.id)}
           >
-            提交
+            {t.submit}
           </button>
           <button
             className="h-8 rounded-md border border-border bg-transparent px-3 text-xs font-medium text-foreground hover:bg-black/5 dark:hover:bg-white/5"
-            onClick={() => onDelete(t.id)}
+            onClick={() => onDelete(ticket.id)}
           >
-            删除
+            {t.delete}
           </button>
         </div>
       </div>
 
       <div className="mt-3">
-        <TradeForm order={t.order} onOrderChange={(next) => onUpdateOrder(t.id, next)} />
+        <TradeForm order={ticket.order} onOrderChange={(next) => onUpdateOrder(ticket.id, next)} />
       </div>
     </div>
   );

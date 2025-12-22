@@ -2,6 +2,7 @@
 
 import type { TradeOrderResponse } from "@/lib/trade/types";
 import { memo } from "react";
+import { useLanguage } from "@/lib/i18n";
 
 export type TradeHistoryItem = {
   id: string;
@@ -15,16 +16,17 @@ type Props = {
 };
 
 export const TradeHistoryPanel = memo(function TradeHistoryPanel({ items }: Props) {
+  const { t } = useLanguage();
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-foreground">交易记录</h2>
-        <div className="text-xs text-muted-foreground">{items.length} 条</div>
+        <h2 className="text-sm font-semibold text-foreground">{t.tradeHistory}</h2>
+        <div className="text-xs text-muted-foreground">{items.length} {t.items}</div>
       </div>
 
       <div className="mt-3 space-y-2">
         {items.length === 0 ? (
-          <div className="text-sm text-muted-foreground">暂无记录（提交后会显示在这里）。</div>
+          <div className="text-sm text-muted-foreground">{t.noTrades}</div>
         ) : null}
 
         {items.map((it) => (

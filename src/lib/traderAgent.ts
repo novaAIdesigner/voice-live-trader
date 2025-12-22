@@ -1,82 +1,296 @@
 import type { VoiceLiveTool } from "@/lib/voiceLive/types";
 
-export const traderInstructionsZh = `你是一个交易员助手（Agent）。
+export type TraderLanguage = "zh" | "en";
 
-目标：帮助用户提交交易订单（股票/基金/债券/期权/数字货币），并在下单后向用户确认订单结果。
+export const traderInstructionsEn = `You are a trading assistant.
 
-客户信息：用户可能会问账户余额（仅 USD/JPY/CNY）、资产持仓（含数字货币持仓）、订单状态；必要时可使用对应工具查询。
+Language policy:
+- Reply in the SAME language as the user's latest message.
+- If the user mixes languages, mirror the dominant language.
 
-行为规范：
-- 不要推销、不要评价、不要评论用户的选择（例如不要说“这是个好/坏选择”）。
-- 对话过程中，请优先把你识别到的订单要素写入 UI 表单：调用 update_order_form 工具（可以是部分字段）。
-- 若用户一次表达多笔订单，请为每一笔订单分别更新一个“草稿单”：对第一笔可直接 update_order_form；对第二笔及后续，使用 update_order_form 并设置 newTicket=true 以创建新的草稿单，然后继续填写该单。
-- 只做澄清与执行：当关键信息缺失或可能有明显错误时，先提示用户“确认一下”，再继续。
-- 如果用户输入可能有误（比如代码不存在、把债券当成股票、数量/价格明显不合理、买卖方向矛盾），请用中性语气提出确认问题。
-- 下单前必须确保字段齐全：资产类型、标的（代码/名称）、方向、数量、订单类型（市价/限价），限价单需限价。
-- 如果用户用“金额”表达下单（例如“用 5 万美元买 MSFT / 把一半美元买微软”）：
-  - 先调用 get_account_snapshot 获取现金余额（USD/JPY/CNY），推导出可用预算；
-  - 再调用 get_market_price 获取当前估算价格，用预算换算出可下单数量（股票/基金/债券/期权按整数股/份/张；数字货币可为小数）；
-  - 用 update_order_form 把 quantity、orderType=market（以及 currency）写入表单，并在 note 中写明预算（例如“预算：50000 USD”）；
-  - 然后让用户确认“按估算数量下单吗”。
-- 当信息已齐全且用户明确表达“确认下单/提交/就按这个下单”等意图时，才调用对应资产的下单工具：place_stock_order / place_fund_order / place_bond_order / place_option_order / place_crypto_order。
-- 工具返回结果后，用自然语言向用户确认：方向、标的、数量、类型、价格（如有）、状态。
-- 不要读出/复述订单号（order id）。如用户明确要求获取订单号，再提示“我可以在界面/日志中展示，但语音里不读出”。
+Core behavior:
+- Keep responses concise and action-oriented.
+- Prefer calling update_order_form to keep the UI draft in sync (partial updates are OK).
+- Place orders ONLY after details are complete and the user explicitly confirms.
+- Ask 1–2 clarification questions when key fields are missing or inconsistent.
+- Never read order ids aloud.
 
-订单生命周期提示：
-- 市价单会立刻成交；限价单会进入待成交状态。
-- 在待成交期间，用户可能要求取消订单或改单；在用户明确意图后再调用 cancel_order / modify_order。
-
-换汇：
-- 用户明确要求换汇时，调用 convert_currency（USD/JPY/CNY）。
-
-输出风格：
-- 简洁、直接、中文。
-- 如需确认，列出你理解的订单要点并提出 1-2 个明确问题。
+Budget orders:
+- If the user orders by amount/budget, call get_account_snapshot then get_market_price, convert budget to quantity, write it to the draft, and ask for confirmation.
 `;
 
-const baseOrderParams = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    symbol: {
-      type: "string",
-      description: "标的代码或名称",
+// Kept for backward compatibility; the app now uses the simplified English prompt.
+export const traderInstructionsZh = traderInstructionsEn;
+
+export function getTraderInstructions(lang: TraderLanguage): string {
+  void lang;
+  // Always use the simplified English prompt to reduce tokens;
+  // the assistant will still reply in the user's language per the policy above.
+  return traderInstructionsEn;
+}
+
+function baseOrderParamsByLang(lang: TraderLanguage) {
+  const zh = {
+    symbol: "标的代码或名称",
+    side: "买卖方向：buy 或 sell",
+    quantity: "数量（必须 > 0）",
+    orderType: "订单类型：market(市价)/limit(限价)",
+    limitPrice: "限价（仅当 orderType=limit 时需要，必须 > 0）",
+    currency: "币种（可选，默认 USD）",
+    timeInForce: "有效期（可选）：day 或 gtc",
+    note: "备注（可选）",
+  };
+  const en = {
+    symbol: "Symbol or name",
+    side: "Side: buy or sell",
+    quantity: "Quantity (must be > 0)",
+    orderType: "Order type: market or limit",
+    limitPrice: "Limit price (required when orderType=limit; must be > 0)",
+    currency: "Currency (optional; default USD)",
+    timeInForce: "Time in force (optional): day or gtc",
+    note: "Note (optional)",
+  };
+
+  const d = lang === "en" ? en : zh;
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      symbol: { type: "string", description: d.symbol },
+      side: { type: "string", enum: ["buy", "sell"], description: d.side },
+      quantity: { type: "integer", description: d.quantity, minimum: 1 },
+      orderType: { type: "string", enum: ["market", "limit"], description: d.orderType },
+      limitPrice: { type: "number", description: d.limitPrice, minimum: 0 },
+      currency: { type: "string", enum: ["USD", "JPY", "CNY"], description: d.currency },
+      timeInForce: { type: "string", enum: ["day", "gtc"], description: d.timeInForce },
+      note: { type: "string", description: d.note },
     },
-    side: {
-      type: "string",
-      enum: ["buy", "sell"],
-      description: "买卖方向：buy 或 sell",
+    required: ["symbol", "side", "quantity", "orderType"],
+  } as const;
+}
+
+const baseOrderParams = baseOrderParamsByLang("zh");
+
+export function buildTradingTools(lang: TraderLanguage): VoiceLiveTool[] {
+  const baseOrderParams = baseOrderParamsByLang(lang);
+  const isEn = lang === "en";
+
+  const getMarketPriceTool: VoiceLiveTool = {
+    type: "function",
+    name: "get_market_price",
+    description: isEn
+      ? "Get an estimated market price (for converting a budget into quantity, or validating price reasonableness)."
+      : "获取当前估算市价（用于把‘按金额下单’换算为数量，或用于校验价格合理性）。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        productType: { type: "string", enum: ["stock", "bond", "fund", "option", "crypto"] },
+        symbol: { type: "string", description: isEn ? "Symbol (e.g., MSFT / BTC)" : "标的代码（例如 MSFT / BTC）" },
+        currency: {
+          type: "string",
+          enum: ["USD", "JPY", "CNY"],
+          description: isEn ? "Quote currency (optional; default USD)" : "计价币种（可选，默认 USD）",
+        },
+      },
+      required: ["productType", "symbol"],
     },
-    quantity: {
-      type: "number",
-      description: "数量（必须 > 0）",
+  };
+
+  const placeStockOrderTool: VoiceLiveTool = {
+    type: "function",
+    name: "place_stock_order",
+    description: isEn
+      ? "Submit a stock order. Use only when details are complete and the user explicitly confirms."
+      : "提交股票订单。仅在信息齐全且用户明确确认下单时使用。",
+    parameters: baseOrderParams,
+  };
+
+  const placeFundOrderTool: VoiceLiveTool = {
+    type: "function",
+    name: "place_fund_order",
+    description: isEn
+      ? "Submit a fund order. Use only when details are complete and the user explicitly confirms."
+      : "提交基金订单。仅在信息齐全且用户明确确认下单时使用。",
+    parameters: baseOrderParams,
+  };
+
+  const placeBondOrderTool: VoiceLiveTool = {
+    type: "function",
+    name: "place_bond_order",
+    description: isEn
+      ? "Submit a bond order. Use only when details are complete and the user explicitly confirms."
+      : "提交债券订单。仅在信息齐全且用户明确确认下单时使用。",
+    parameters: baseOrderParams,
+  };
+
+  const placeCryptoOrderTool: VoiceLiveTool = {
+    type: "function",
+    name: "place_crypto_order",
+    description: isEn
+      ? "Submit a crypto order. Use only when details are complete and the user explicitly confirms."
+      : "提交数字货币订单。仅在信息齐全且用户明确确认下单时使用。",
+    parameters: {
+      ...baseOrderParams,
+      properties: {
+        ...(baseOrderParams as any).properties,
+        quantity: {
+          type: "number",
+          minimum: 0,
+          description: isEn ? "Quantity (can be fractional; must be > 0)" : "数量（可为小数；必须 > 0）",
+        },
+        currency: {
+          type: "string",
+          enum: ["USD"],
+          description: isEn ? "Crypto is quoted in USD only (default USD)" : "数字货币仅支持使用 USD 买卖（默认 USD）",
+        },
+      },
+    } as const,
+  };
+
+  const placeOptionOrderTool: VoiceLiveTool = {
+    type: "function",
+    name: "place_option_order",
+    description: isEn
+      ? "Submit an option order. Use only when details are complete and the user explicitly confirms."
+      : "提交期权订单。仅在信息齐全且用户明确确认下单时使用。",
+    parameters: {
+      ...baseOrderParams,
+      properties: {
+        ...(baseOrderParams as any).properties,
+        optionType: { type: "string", enum: ["call", "put"], description: isEn ? "Option type (optional)" : "期权类型（可选）" },
+        strike: { type: "number", description: isEn ? "Strike price (optional)" : "行权价（可选）" },
+        expiry: { type: "string", description: isEn ? "Expiry (optional, e.g. 2026-03-27)" : "到期日（可选，例如 2026-03-27）" },
+      },
+    } as const,
+  };
+
+  const updateOrderFormTool: VoiceLiveTool = {
+    type: "function",
+    name: "update_order_form",
+    description: isEn
+      ? "Update the UI order draft (no submission). Use this to fill recognized fields into the form during conversation. Partial fields are allowed."
+      : "更新 UI 上的交易表单草稿（不下单）。用于在对话过程中把已识别的字段逐步填写到表单里。字段允许部分提供。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        ticketId: {
+          type: "string",
+          description: isEn
+            ? "Optional: draft ticket id to update (usually from the previous update_order_form result)."
+            : "可选：要更新的草稿单 id。通常由上一次 update_order_form 的返回值获得。",
+        },
+        newTicket: {
+          type: "boolean",
+          description: isEn
+            ? "Optional: create a new draft ticket and update it (for multiple orders). Default false."
+            : "可选：是否新建一个草稿单并更新它（用于一次填写多笔订单）。默认 false。",
+        },
+        productType: { type: "string", enum: ["stock", "bond", "fund", "option", "crypto"] },
+        symbol: { type: "string" },
+        side: { type: "string", enum: ["buy", "sell"] },
+        quantity: { type: "number" },
+        orderType: { type: "string", enum: ["market", "limit"] },
+        limitPrice: { type: "number" },
+        currency: { type: "string", enum: ["USD", "JPY", "CNY"] },
+        timeInForce: { type: "string", enum: ["day", "gtc"] },
+        note: { type: "string" },
+        clear: {
+          type: "boolean",
+          description: isEn ? "Clear the form before filling (default false)." : "是否清空表单后再填写（默认 false）。",
+        },
+        optionType: { type: "string", enum: ["call", "put"], description: isEn ? "Option type (optional)" : "期权类型（可选）" },
+        strike: { type: "number", description: isEn ? "Strike price (optional)" : "行权价（可选）" },
+        expiry: { type: "string", description: isEn ? "Expiry (optional, e.g. 2026-03-27)" : "到期日（可选，例如 2026-03-27）" },
+        maturity: { type: "string", description: isEn ? "Bond maturity (optional, e.g. 2030-06-30)" : "债券到期日（可选，例如 2030-06-30）" },
+      },
+      required: [],
     },
-    orderType: {
-      type: "string",
-      enum: ["market", "limit"],
-      description: "订单类型：market(市价)/limit(限价)",
+  };
+
+  const getAccountSnapshotTool: VoiceLiveTool = {
+    type: "function",
+    name: "get_account_snapshot",
+    description: isEn
+      ? "Get current account snapshot: cash balances (USD/JPY/CNY only), asset positions (including crypto), and orders list."
+      : "获取当前客户账户信息：现金余额（仅 USD/JPY/CNY）、资产持仓（含数字货币持仓）、订单列表。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+      required: [],
     },
-    limitPrice: {
-      type: "number",
-      description: "限价（仅当 orderType=limit 时需要，必须 > 0）",
+  };
+
+  const convertCurrencyTool: VoiceLiveTool = {
+    type: "function",
+    name: "convert_currency",
+    description: isEn
+      ? "Convert between USD/JPY/CNY. Use only when the user explicitly requests currency conversion."
+      : "在 USD/JPY/CNY 之间换汇。仅在用户明确要求时使用。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        from: { type: "string", enum: ["USD", "JPY", "CNY"] },
+        to: { type: "string", enum: ["USD", "JPY", "CNY"] },
+        amount: { type: "number", description: isEn ? "Amount to sell (must be > 0)" : "换出金额，必须 > 0" },
+      },
+      required: ["from", "to", "amount"],
     },
-    currency: {
-      type: "string",
-      enum: ["USD", "JPY", "CNY"],
-      description: "币种（可选，默认 USD）",
+  };
+
+  const cancelOrderTool: VoiceLiveTool = {
+    type: "function",
+    name: "cancel_order",
+    description: isEn
+      ? "Cancel a pending order. Use only when the user explicitly asks to cancel."
+      : "取消待成交（pending）的订单。仅在用户明确要求取消时使用。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        orderId: { type: "string", description: isEn ? "Order id" : "订单号" },
+      },
+      required: ["orderId"],
     },
-    timeInForce: {
-      type: "string",
-      enum: ["day", "gtc"],
-      description: "有效期（可选）：day 或 gtc",
+  };
+
+  const modifyOrderTool: VoiceLiveTool = {
+    type: "function",
+    name: "modify_order",
+    description: isEn
+      ? "Modify a pending order. Use only when the user explicitly asks to modify."
+      : "修改待成交（pending）的订单（改单）。仅在用户明确要求改单时使用。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        orderId: { type: "string", description: isEn ? "Order id" : "订单号" },
+        quantity: { type: "number", description: isEn ? "New quantity (optional)" : "新数量（可选）" },
+        limitPrice: { type: "number", description: isEn ? "New limit price (optional; for limit orders only)" : "新限价（可选，限价单才适用）" },
+        timeInForce: { type: "string", enum: ["day", "gtc"], description: isEn ? "New time in force (optional)" : "新有效期（可选）" },
+        note: { type: "string", description: isEn ? "New note (optional)" : "新备注（可选）" },
+      },
+      required: ["orderId"],
     },
-    note: {
-      type: "string",
-      description: "备注（可选）",
-    },
-  },
-  required: ["symbol", "side", "quantity", "orderType"],
-} as const;
+  };
+
+  return [
+    updateOrderFormTool,
+    placeStockOrderTool,
+    placeFundOrderTool,
+    placeBondOrderTool,
+    placeOptionOrderTool,
+    placeCryptoOrderTool,
+    getAccountSnapshotTool,
+    getMarketPriceTool,
+    convertCurrencyTool,
+    cancelOrderTool,
+    modifyOrderTool,
+  ];
+}
 
 export const getMarketPriceTool: VoiceLiveTool = {
   type: "function",

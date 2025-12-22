@@ -20,6 +20,9 @@ export type VoiceLiveConnectionConfig = {
   languageHint?: string; // e.g. zh,en
   enableAudioLogging?: boolean;
   enableBargeIn?: boolean;
+  vadThreshold?: number; // 0.0 - 1.0
+  vadPrefixPaddingMs?: number;
+  vadSilenceDurationMs?: number;
 };
 
 export type VoiceLiveClientEvent = Record<string, unknown> & { type: string };

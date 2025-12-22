@@ -1,3 +1,5 @@
+import { VoiceLiveClient as AzureVoiceLiveClient, VoiceLiveSession } from "@azure/ai-voicelive";
+import { AzureKeyCredential } from "@azure/core-auth";
 import { bytesToBase64, base64ToBytes } from "@/lib/base64";
 import { Pcm16Player, pcm16Base64ToChunk } from "@/lib/audio";
 import type {
@@ -62,628 +64,242 @@ function emptyWire(): WireStats {
   };
 }
 
-function asRecord(v: unknown): Record<string, unknown> | null {
-  if (!v || typeof v !== "object") return null;
-  return v as Record<string, unknown>;
-}
-
-function getString(r: Record<string, unknown>, key: string): string | undefined {
-  const v = r[key];
-  return typeof v === "string" ? v : undefined;
-}
-
-function getNumber(r: Record<string, unknown>, key: string): number | undefined {
-  const v = r[key];
-  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
-}
-
-function getArray(r: Record<string, unknown>, key: string): unknown[] | undefined {
-  const v = r[key];
-  return Array.isArray(v) ? v : undefined;
-}
-
-function redactForConsole(value: unknown, depth = 0, keyHint?: string): unknown {
-  const maxDepth = 5;
-  const maxString = 400;
-  const maxArray = 50;
-
-  if (depth > maxDepth) return "[Truncated]";
-
-  if (typeof value === "string") {
-    const k = (keyHint ?? "").toLowerCase();
-    if (k === "audio" || k === "delta") return `<${k}:base64:${value.length}>`;
-    if (value.length > maxString) return `${value.slice(0, maxString)}…(len=${value.length})`;
-    return value;
-  }
-
-  if (Array.isArray(value)) {
-    const head = value.slice(0, maxArray).map((v) => redactForConsole(v, depth + 1));
-    if (value.length > maxArray) return [...head, `…(+${value.length - maxArray} items)`];
-    return head;
-  }
-
-  if (!value || typeof value !== "object") return value;
-
-  const obj = value as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
-  for (const k of Object.keys(obj)) {
-    out[k] = redactForConsole(obj[k], depth + 1, k);
-  }
-  return out;
-}
-
-function shouldLogVoiceLiveEvent(type: string) {
-  // Avoid console spam from high-frequency audio/transcript streaming.
-  if (type.endsWith(".delta")) return false;
-
-  const noisy = new Set([
-    // outgoing mic chunks
-    "input_audio_buffer.append",
-  ]);
-  if (noisy.has(type)) return false;
-
-  // Keep these input-audio buffer events (useful for barge-in/debug).
-  if (type === "input_audio_buffer.speech_started" || type === "input_audio_buffer.speech_stopped") return true;
-  if (type === "input_audio_buffer_speech_started" || type === "input_audio_buffer_speech_stopped") return true;
-
-  // Keep major lifecycle + tool + response events.
-  if (type.startsWith("session.")) return true;
-  if (type.startsWith("conversation.")) return true;
-  if (type.startsWith("response.")) return true;
-  if (type === "error") return true;
-
-  // Default: log everything else (both directions).
-  return true;
-}
-
 export class VoiceLiveClient {
-  private ws: WebSocket | null = null;
-  private status: VoiceLiveStatus = "disconnected";
-
-  private enableBargeIn = true;
-  private responseActive = false;
-  private responseApiDone = true;
-  private bargeInCancelSent = false;
-
-  private responseCreateInFlight = false;
-  private pendingResponseCreate = false;
-
+  private session: VoiceLiveSession | null = null;
+  private subscription: { close: () => Promise<void> } | null = null;
   private callbacks: VoiceLiveCallbacks;
-  private tools: VoiceLiveTool[];
   private functionHandler: FunctionCallHandler;
+  private tools: VoiceLiveTool[];
 
-  private player = new Pcm16Player();
-  private usage: UsageTotals = emptyUsage();
-  private wire: WireStats = emptyWire();
+  private enableBargeIn = false;
+  private userSpeaking = false;
 
-  private pendingFunctionCallsById = new Map<string, { name: string; itemId?: string }>();
-
-  private speechEndAtMs: number | null = null;
-  private waitingFirstResponse = false;
-  private speechToFirstResponseMs: number[] = [];
-
-  private assistantTextBuffer = "";
-  private assistantTextDoneEmitted = false;
-  private lastAssistantTextDone = "";
-
+  private player: Pcm16Player;
   private audioContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
   private workletNode: AudioWorkletNode | null = null;
 
-  constructor(args: {
+  private usage: UsageTotals = emptyUsage();
+  private wire: WireStats = emptyWire();
+  private currentAssistantText = "";
+
+  // Track pending function calls to know their name when arguments are done.
+  private pendingFunctionCallsById = new Map<string, { name: string; itemId: string }>();
+
+  constructor(options: {
     tools: VoiceLiveTool[];
     functionHandler: FunctionCallHandler;
-    callbacks?: VoiceLiveCallbacks;
+    callbacks: VoiceLiveCallbacks;
   }) {
-    this.tools = args.tools;
-    this.functionHandler = args.functionHandler;
-    this.callbacks = args.callbacks ?? {};
-  }
-
-  getStatus() {
-    return this.status;
-  }
-
-  getStats() {
-    return { usage: this.usage, wire: this.wire };
-  }
-
-  private setStatus(status: VoiceLiveStatus) {
-    this.status = status;
-    this.callbacks.onStatus?.(status);
-  }
-
-  private emitStats() {
-    this.callbacks.onStats?.(this.getStats());
-  }
-
-  private send(event: VoiceLiveClientEvent) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error("WebSocket not connected");
-
-    try {
-      // Log every outgoing client event. Large payload fields (audio/delta) are redacted.
-      if (shouldLogVoiceLiveEvent(event.type)) {
-        console.info("[VoiceLive] send", event.type, redactForConsole(event));
-      }
-    } catch {
-      // ignore
-    }
-
-    const payload = JSON.stringify(event);
-    this.ws.send(payload);
-    this.wire.wsSentBytes += new TextEncoder().encode(payload).byteLength;
-    this.emitStats();
-  }
-
-  private requestResponseCreate() {
-    if (this.responseActive || this.responseCreateInFlight) {
-      this.pendingResponseCreate = true;
-      return;
-    }
-
-    this.responseCreateInFlight = true;
-    try {
-      this.send({ type: "response.create" });
-    } catch (e) {
-      this.responseCreateInFlight = false;
-      throw e;
-    }
+    this.tools = options.tools;
+    this.functionHandler = options.functionHandler;
+    this.callbacks = options.callbacks;
+    this.player = new Pcm16Player(); 
   }
 
   async connect(config: VoiceLiveConnectionConfig) {
-    if (this.ws) this.disconnect();
+    if (this.session) {
+      throw new Error("Already connected");
+    }
 
-    // Best-effort: resume playback context from a user gesture (connect button).
-    // This helps avoid autoplay restrictions when the first audio delta arrives.
+    this.callbacks.onStatus?.("connecting");
+
+    this.enableBargeIn = !!config.enableBargeIn;
+    this.userSpeaking = false;
+
     try {
-      await this.player.ensureRunning();
-    } catch {
-      // ignore
-    }
+      const host = normalizeResourceHost(config.resourceHost);
+      if (!host) throw new Error("Invalid resource host");
+      const endpoint = `https://${host}`;
 
-    this.usage = emptyUsage();
-    this.wire = emptyWire();
-    this.emitStats();
-
-    this.setStatus("connecting");
-
-    this.enableBargeIn = config.enableBargeIn !== false;
-    this.responseActive = false;
-    this.responseApiDone = true;
-    this.bargeInCancelSent = false;
-    this.responseCreateInFlight = false;
-    this.pendingResponseCreate = false;
-
-    this.speechEndAtMs = null;
-    this.waitingFirstResponse = false;
-    this.speechToFirstResponseMs = [];
-
-    const resourceHost = normalizeResourceHost(config.resourceHost);
-    if (!resourceHost) {
-      this.setStatus("disconnected");
-      this.callbacks.onError?.(
-        "Invalid Resource Host. Please enter a host like <resource>.services.ai.azure.com (do not include https:// or path).",
+      const client = new AzureVoiceLiveClient(
+        endpoint,
+        new AzureKeyCredential(config.apiKey),
+        { apiVersion: config.apiVersion }
       );
-      return;
-    }
 
-    if (/\.cognitiveservices\.azure\.com$/i.test(resourceHost)) {
-      this.callbacks.onError?.(
-        "Resource Host looks like a Cognitive Services endpoint. Voice Live typically uses <resource>.services.ai.azure.com. If connection fails, try using that host.",
-      );
-    }
+      this.session = await client.startSession(config.model);
 
-    const url = new URL(`wss://${resourceHost}/voice-live/realtime`);
-    url.searchParams.set("api-version", config.apiVersion);
-    url.searchParams.set("model", config.model);
-    url.searchParams.set("api-key", config.apiKey);
-
-    const ws = new WebSocket(url.toString());
-    this.ws = ws;
-
-    ws.onopen = () => {
-      this.setStatus("connected");
-
-      try {
-        console.debug("[VoiceLive] ws open");
-      } catch {
-        // ignore
-      }
-
-      const sessionUpdate: VoiceLiveClientEvent = {
-        type: "session.update",
-        session: {
-          modalities: ["text", "audio"],
-          instructions: config.instructions,
-          voice: config.voice,
-          input_audio_format: "pcm16",
-          input_audio_sampling_rate: 24000,
-          output_audio_format: "pcm16",
-          turn_detection: {
-            type: "azure_semantic_vad_multilingual",
-            threshold: 0.3,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 500,
-            interrupt_response: true,
-            auto_truncate: true,
-            create_response: true,
-          },
-          input_audio_noise_reduction: { type: "azure_deep_noise_suppression" },
-          input_audio_echo_cancellation: { type: "server_echo_cancellation" },
-          input_audio_transcription: config.languageHint
-            ? { model: "azure-speech", language: config.languageHint }
-            : { model: "azure-speech" },
-          tools: this.tools,
-          tool_choice: "auto",
+      this.subscription = this.session.subscribe({
+        onConnected: async () => {
+          this.callbacks.onStatus?.("connected");
         },
-      };
+        onDisconnected: async () => {
+          this.callbacks.onStatus?.("disconnected");
+          this.cleanup();
+        },
+        onError: async (args) => {
+          this.callbacks.onError?.(args.error.message);
+        },
+        onServerEvent: async (event) => {
+          // Pass through all server events for logging/debugging
+          this.callbacks.onServerEvent?.(event as unknown as VoiceLiveServerEvent);
+          
+          // Update wire stats for received bytes (approximate)
+          // The SDK doesn't expose raw bytes easily, so we might skip exact byte counting or estimate it.
+          // For now, we won't update wsReceivedBytes accurately.
+        },
+        onInputAudioBufferSpeechStarted: async () => {
+            this.userSpeaking = true;
 
-      try {
-        this.send(sessionUpdate);
-      } catch (e) {
-        this.callbacks.onError?.(e instanceof Error ? e.message : String(e));
-      }
-    };
+            // Barge-in UX: stop any currently playing assistant audio immediately.
+            if (this.enableBargeIn) {
+              this.player.stop();
 
-    ws.onmessage = async (msg) => {
-      const data = typeof msg.data === "string" ? msg.data : "";
-      this.wire.wsReceivedBytes += new TextEncoder().encode(data).byteLength;
-
-      let event: VoiceLiveServerEvent;
-      try {
-        event = JSON.parse(data);
-      } catch {
-        return;
-      }
-
-      try {
-        // Log every incoming server event. Large payload fields (audio/delta) are redacted.
-        if (shouldLogVoiceLiveEvent(event.type)) {
-          console.info("[VoiceLive] recv", event.type, redactForConsole(event));
-        }
-      } catch {
-        // ignore
-      }
-
-      this.callbacks.onServerEvent?.(event);
-
-      const type = event.type;
-      const r = asRecord(event) ?? {};
-
-      const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
-
-      const markFirstResponse = () => {
-        if (!this.waitingFirstResponse || this.speechEndAtMs === null) return;
-        const dt = Math.max(0, nowMs - this.speechEndAtMs);
-        this.waitingFirstResponse = false;
-        this.speechEndAtMs = null;
-        this.speechToFirstResponseMs.push(dt);
-
-        const xs = this.speechToFirstResponseMs.slice().sort((a, b) => a - b);
-        const n = xs.length;
-        const min = xs[0] ?? 0;
-        const avg = n ? xs.reduce((a, b) => a + b, 0) / n : 0;
-        const p90Index = n ? Math.max(0, Math.ceil(0.9 * n) - 1) : 0;
-        const p90 = xs[p90Index] ?? 0;
-
-        this.usage.speechEndToFirstResponseCount = n;
-        this.usage.speechEndToFirstResponseMsMin = min;
-        this.usage.speechEndToFirstResponseMsAvg = avg;
-        this.usage.speechEndToFirstResponseMsP90 = p90;
-        this.emitStats();
-      };
-
-      if (type === "response.created") {
-        this.responseActive = true;
-        this.responseApiDone = false;
-        this.bargeInCancelSent = false;
-        this.responseCreateInFlight = false;
-        this.assistantTextBuffer = "";
-        this.assistantTextDoneEmitted = false;
-        markFirstResponse();
-      }
-
-      if (type === "response.done") {
-        this.responseActive = false;
-        this.responseApiDone = true;
-        this.bargeInCancelSent = false;
-
-        if (this.pendingResponseCreate) {
-          this.pendingResponseCreate = false;
-          try {
-            this.requestResponseCreate();
-          } catch {
-            // ignore
-          }
-        }
-      }
-
-      if (type === "input_audio_buffer.speech_stopped" || type === "input_audio_buffer_speech_stopped") {
-        this.speechEndAtMs = nowMs;
-        this.waitingFirstResponse = true;
-      }
-
-      if (this.enableBargeIn && (type === "input_audio_buffer.speech_started" || type === "input_audio_buffer_speech_started")) {
-        // Stop current playback immediately (barge-in).
-        this.player.stop();
-
-        // Cancel the in-flight response if there is one.
-        if (this.responseActive && !this.responseApiDone && !this.bargeInCancelSent) {
-          try {
-            this.send({ type: "response.cancel" });
-            this.bargeInCancelSent = true;
-          } catch {
-            // ignore
-          }
-        }
-      }
-
-      if (type === "error") {
-        const err = asRecord(r.error);
-        const message = (err && getString(err, "message")) ?? "VoiceLive error";
-        this.callbacks.onError?.(message);
-        this.emitStats();
-        return;
-      }
-
-      if (type === "response.text.delta") {
-        const delta = getString(r, "delta");
-        if (delta) {
-          this.assistantTextBuffer += delta;
-          this.callbacks.onAssistantTextDelta?.(delta);
-        }
-        markFirstResponse();
-      }
-
-      if (type === "response.output_text.delta") {
-        const delta = getString(r, "delta");
-        if (delta) {
-          this.assistantTextBuffer += delta;
-          this.callbacks.onAssistantTextDelta?.(delta);
-        }
-        markFirstResponse();
-      }
-
-      if (type === "response.audio_transcript.delta" || type === "response.output_audio_transcript.delta") {
-        const delta = getString(r, "delta");
-        if (delta) {
-          this.assistantTextBuffer += delta;
-          this.callbacks.onAssistantTextDelta?.(delta);
-        }
-        markFirstResponse();
-      }
-
-      if (type === "response.text.done") {
-        const text = getString(r, "text");
-        if (text) {
-          this.assistantTextBuffer = text;
-          if (!this.assistantTextDoneEmitted && text !== this.lastAssistantTextDone) {
-            this.assistantTextDoneEmitted = true;
-            this.lastAssistantTextDone = text;
-            this.callbacks.onAssistantTextDone?.(text);
-          }
-        }
-      }
-
-      if (type === "response.output_text.done") {
-        const text = getString(r, "text");
-        if (text) {
-          this.assistantTextBuffer = text;
-          if (!this.assistantTextDoneEmitted && text !== this.lastAssistantTextDone) {
-            this.assistantTextDoneEmitted = true;
-            this.lastAssistantTextDone = text;
-            this.callbacks.onAssistantTextDone?.(text);
-          }
-        }
-      }
-
-      if (type === "response.audio_transcript.done" || type === "response.output_audio_transcript.done") {
-        const text = getString(r, "text");
-        if (text) {
-          this.assistantTextBuffer = text;
-          if (!this.assistantTextDoneEmitted && text !== this.lastAssistantTextDone) {
-            this.assistantTextDoneEmitted = true;
-            this.lastAssistantTextDone = text;
-            this.callbacks.onAssistantTextDone?.(text);
-          }
-        }
-      }
-
-      if (type === "response.audio.delta") {
-        const delta = getString(r, "delta");
-        if (delta && delta.length > 0) {
-          const bytes = base64ToBytes(delta);
-          this.wire.audioReceivedBytes += bytes.byteLength;
-          await this.player.ensureRunning();
-          this.player.enqueue(pcm16Base64ToChunk(delta, 24000));
-          this.emitStats();
-          markFirstResponse();
-        }
-      }
-
-      if (type === "conversation.item.input_audio_transcription.completed") {
-        const transcript = getString(r, "transcript");
-        if (transcript) this.callbacks.onUserTranscript?.(transcript);
-      }
-
-      if (type === "response.output_item.added") {
-        const item = asRecord(r.item);
-        if (item && getString(item, "type") === "function_call") {
-          const callId = getString(item, "call_id");
-          const name = getString(item, "name");
-          const itemId = getString(item, "id");
-          if (callId && name) this.pendingFunctionCallsById.set(callId, { name, itemId });
-        }
-      }
-
-      if (type === "response.output_item.done") {
-        const item = asRecord(r.item);
-        if (item && getString(item, "type") === "message" && getString(item, "role") === "assistant") {
-          const content = getArray(item, "content");
-          if (content) {
-            let text = "";
-            for (const partUnknown of content) {
-              const part = asRecord(partUnknown);
-              if (!part) continue;
-              const partType = getString(part, "type");
-              if (partType === "output_text" || partType === "text") {
-                const t = getString(part, "text");
-                if (t) text += t;
+              // Best-effort: ask server to cancel any in-progress response so it stops streaming TTS.
+              try {
+                await this.session?.sendEvent({ type: "response.cancel" } as any);
+              } catch {
+                // ignore if not supported
               }
             }
-            if (text) {
-              this.assistantTextBuffer = text;
-              if (!this.assistantTextDoneEmitted && text !== this.lastAssistantTextDone) {
-                this.assistantTextDoneEmitted = true;
-                this.lastAssistantTextDone = text;
-                this.callbacks.onAssistantTextDone?.(text);
-              }
+
+            this.callbacks.onServerEvent?.({ type: "input_audio_buffer.speech_started" } as any);
+        },
+        onInputAudioBufferSpeechStopped: async () => {
+            this.userSpeaking = false;
+            this.callbacks.onServerEvent?.({ type: "input_audio_buffer.speech_stopped" } as any);
+        },
+        onResponseAudioDelta: async (event) => {
+          if (event.delta) {
+            // If the user is currently speaking and barge-in is enabled, suppress assistant audio.
+            if (this.enableBargeIn && this.userSpeaking) return;
+
+            // event.delta is Uint8Array in the SDK
+            const chunk = { sampleRate: 24000, bytes: event.delta };
+            this.player.enqueue(chunk);
+            this.wire.audioReceivedBytes += chunk.bytes.byteLength;
+            this.emitStats();
+          }
+        },
+        onResponseTextDelta: async (event) => {
+          if (event.delta) {
+            this.currentAssistantText += event.delta;
+            this.callbacks.onAssistantTextDelta?.(event.delta);
+          }
+        },
+        onResponseTextDone: async (event) => {
+          const text = this.currentAssistantText;
+          this.currentAssistantText = "";
+          this.callbacks.onAssistantTextDone?.(text); 
+        },
+        onConversationItemInputAudioTranscriptionCompleted: async (event) => {
+          if (event.transcript) {
+            this.callbacks.onUserTranscript?.(event.transcript);
+          }
+        },
+        onResponseOutputItemAdded: async (event) => {
+          const item = event.item;
+          if (item && item.type === "function_call") {
+            const callItem = item as any;
+            const callId = callItem.call_id ?? callItem.callId;
+            if (typeof callId === "string" && callId) {
+              this.pendingFunctionCallsById.set(callId, { name: callItem.name, itemId: callItem.id });
             }
           }
-        }
-      }
+        },
+        onResponseFunctionCallArgumentsDone: async (event) => {
+          const callId: string | undefined = (event as any).callId ?? (event as any).call_id;
+          const args: string | undefined = (event as any).arguments ?? (event as any).args;
 
-      if (type === "response.function_call_arguments.done") {
-        const callId = getString(r, "call_id");
-        const args = getString(r, "arguments");
-        if (callId && typeof args === "string") {
+          if (!callId) return;
           const pending = this.pendingFunctionCallsById.get(callId);
-          if (!pending) return;
+          
+          if (pending && this.session) {
+            this.wire.toolCalls++;
+            this.emitStats();
 
-          this.wire.toolCalls += 1;
-          this.emitStats();
+            try {
+              const result = await this.functionHandler({
+                name: pending.name,
+                callId,
+                argumentsJson: args ?? "{}",
+              });
 
-          try {
-            const result = await this.functionHandler({
-              name: pending.name,
-              callId,
-              argumentsJson: args,
-            });
-
-            this.send({
-              type: "conversation.item.create",
-              previous_item_id: pending.itemId,
-              item: {
+              await this.session.addConversationItem({
                 type: "function_call_output",
+                callId,
                 call_id: callId,
                 output: result.output,
-              },
-            });
+              } as any);
 
-            // Let the model finish the response using the tool output.
-            this.requestResponseCreate();
-          } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            this.send({
-              type: "conversation.item.create",
-              previous_item_id: pending.itemId,
-              item: {
+              // Request a response to process the tool output
+              await this.session.sendEvent({ type: "response.create" });
+
+            } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              await this.session.addConversationItem({
                 type: "function_call_output",
+                callId,
                 call_id: callId,
                 output: JSON.stringify({ error: message }),
-              },
-            });
-            this.requestResponseCreate();
-          } finally {
-            this.pendingFunctionCallsById.delete(callId);
+              } as any);
+              await this.session.sendEvent({ type: "response.create" });
+            } finally {
+              this.pendingFunctionCallsById.delete(callId);
+            }
           }
+        },
+        onResponseDone: async (event) => {
+            if (event.response.usage) {
+                const u = event.response.usage;
+                this.usage.totalTokens = u.totalTokens;
+                this.usage.inputTokens = u.inputTokens;
+                this.usage.outputTokens = u.outputTokens;
+                // Map other usage fields if available
+                this.emitStats();
+            }
         }
-      }
+      });
 
-      if (type === "response.done") {
-        this.usage.turns += 1;
+      await this.session.connect();
+      this.callbacks.onStatus?.("connected");
 
-        // If the response was audio-only, we may only have transcript deltas.
-        if (!this.assistantTextDoneEmitted && this.assistantTextBuffer.trim()) {
-          const text = this.assistantTextBuffer.trim();
-          if (text !== this.lastAssistantTextDone) {
-            this.lastAssistantTextDone = text;
-            this.callbacks.onAssistantTextDone?.(text);
-          }
-          this.assistantTextDoneEmitted = true;
-        }
+      // Initial configuration
+      await this.session.updateSession({
+        instructions: config.instructions,
+        voice: config.voice.type === "azure-standard" 
+            ? { type: "azure-standard", name: config.voice.name, temperature: config.voice.temperature }
+            : { type: "openai", name: config.voice.name },
+        inputAudioFormat: "pcm16",
+        outputAudioFormat: "pcm16",
+        turnDetection: config.enableBargeIn ? {
+           type: "azure_semantic_vad",
+           threshold: config.vadThreshold ?? 0.5,
+           prefix_padding_ms: config.vadPrefixPaddingMs ?? 300,
+           silence_duration_ms: config.vadSilenceDurationMs ?? 200
+        } : undefined,
+        inputAudioNoiseReduction: { type: "azure_deep_noise_suppression" },
+        inputAudioEchoCancellation: { type: "server_echo_cancellation" },
+        tools: this.tools as any, // Cast to any as SDK types might differ slightly but structure is compatible
+        toolChoice: "auto",
+      } as any);
 
-        const response = asRecord(r.response);
-        const usage = response ? asRecord(response.usage) : null;
-        if (usage) {
-          this.usage.totalTokens += getNumber(usage, "total_tokens") ?? 0;
-          this.usage.inputTokens += getNumber(usage, "input_tokens") ?? 0;
-          this.usage.outputTokens += getNumber(usage, "output_tokens") ?? 0;
-
-          const inputDetails = asRecord(usage.input_token_details);
-          const outputDetails = asRecord(usage.output_token_details);
-          this.usage.inputTextTokens += (inputDetails && getNumber(inputDetails, "text_tokens")) ?? 0;
-          this.usage.inputAudioTokens += (inputDetails && getNumber(inputDetails, "audio_tokens")) ?? 0;
-          this.usage.outputTextTokens += (outputDetails && getNumber(outputDetails, "text_tokens")) ?? 0;
-          this.usage.outputAudioTokens += (outputDetails && getNumber(outputDetails, "audio_tokens")) ?? 0;
-
-          // Cached tokens (if present)
-          this.usage.inputCachedTokens += (inputDetails && getNumber(inputDetails, "cached_tokens")) ?? 0;
-          this.usage.outputCachedTokens += (outputDetails && getNumber(outputDetails, "cached_tokens")) ?? 0;
-
-          this.usage.inputTextCachedTokens += (inputDetails && getNumber(inputDetails, "cached_text_tokens")) ?? 0;
-          this.usage.inputAudioCachedTokens += (inputDetails && getNumber(inputDetails, "cached_audio_tokens")) ?? 0;
-          this.usage.outputTextCachedTokens += (outputDetails && getNumber(outputDetails, "cached_text_tokens")) ?? 0;
-          this.usage.outputAudioCachedTokens += (outputDetails && getNumber(outputDetails, "cached_audio_tokens")) ?? 0;
-        }
-        this.emitStats();
-      }
-
-      this.emitStats();
-    };
-
-    ws.onerror = () => {
-      try {
-        console.debug("[VoiceLive] ws error");
-      } catch {
-        // ignore
-      }
-      this.callbacks.onError?.("WebSocket error");
-    };
-
-    ws.onclose = () => {
-      try {
-        console.debug("[VoiceLive] ws close");
-      } catch {
-        // ignore
-      }
-      this.setStatus("disconnected");
-      this.stopMicrophone();
-      this.player.stop();
-    };
-  }
-
-  disconnect() {
-    try {
-      this.stopMicrophone();
-      this.ws?.close();
-    } finally {
-      this.ws = null;
-      this.setStatus("disconnected");
-      this.responseCreateInFlight = false;
-      this.pendingResponseCreate = false;
+    } catch (e) {
+      this.callbacks.onError?.(e instanceof Error ? e.message : String(e));
+      this.callbacks.onStatus?.("disconnected");
+      this.cleanup();
     }
   }
 
-  sendTextMessage(text: string) {
-    const trimmed = text.trim();
-    if (!trimmed) return;
+  async disconnect() {
+    if (this.session) {
+      await this.session.disconnect();
+      this.cleanup();
+    }
+  }
 
-    this.send({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: trimmed }],
-      },
-    });
-
-    // For text input, explicitly request a response.
-    this.requestResponseCreate();
+  private cleanup() {
+    this.stopMicrophone();
+    this.player.stop();
+    this.subscription?.close();
+    this.subscription = null;
+    this.session = null;
+    this.pendingFunctionCallsById.clear();
   }
 
   async startMicrophone() {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error("Connect first");
+    if (!this.session) throw new Error("Connect first");
     if (this.workletNode) return;
 
     await this.player.ensureRunning();
@@ -691,11 +307,16 @@ export class VoiceLiveClient {
     const ac = new AudioContext();
     this.audioContext = ac;
 
-    // BasePath-safe (GitHub Pages): avoid absolute "/worklets/..." which 404s under /<repo>/.
     const workletUrl = new URL("worklets/pcm16-downsampler.js", document.baseURI).toString();
     await ac.audioWorklet.addModule(workletUrl);
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
     this.mediaStream = stream;
 
     const source = ac.createMediaStreamSource(stream);
@@ -706,16 +327,12 @@ export class VoiceLiveClient {
       const buffer = e.data as ArrayBuffer;
       const pcm16Bytes = new Uint8Array(buffer);
       this.wire.audioSentBytes += pcm16Bytes.byteLength;
-
-      // NOTE: Do not cancel on any mic audio chunk. That can interrupt assistant playback
-      // due to continuous low-level noise/echo. We rely on server-side VAD speech_started
-      // (and explicit input_audio_buffer.speech_started) for barge-in.
-
-      const b64 = bytesToBase64(pcm16Bytes);
-      this.send({ type: "input_audio_buffer.append", audio: b64 });
+      
+      if (this.session) {
+        this.session.sendAudio(pcm16Bytes);
+      }
     };
 
-    // Keep the graph alive.
     const gain = ac.createGain();
     gain.gain.value = 0;
 
@@ -737,5 +354,23 @@ export class VoiceLiveClient {
       this.audioContext.close();
     }
     this.audioContext = null;
+  }
+
+  async sendTextMessage(text: string) {
+    if (!this.session) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    await this.session.addConversationItem({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: trimmed }],
+    } as any);
+    
+    await this.session.sendEvent({ type: "response.create" });
+  }
+
+  private emitStats() {
+    this.callbacks.onStats?.({ usage: this.usage, wire: this.wire });
   }
 }

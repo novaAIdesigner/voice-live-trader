@@ -2,6 +2,7 @@
 
 import type { ModifyOrderRequest, OrderRecord } from "@/lib/trade/types";
 import { useMemo, useState, memo } from "react";
+import { useLanguage } from "@/lib/i18n";
 
 type Props = {
   orders: OrderRecord[];
@@ -10,6 +11,7 @@ type Props = {
 };
 
 export const OrdersPanel = memo(function OrdersPanel({ orders, onCancel, onModify }: Props) {
+  const { t } = useLanguage();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [q, setQ] = useState<string>("");
   const [limit, setLimit] = useState<string>("");
@@ -62,18 +64,30 @@ export const OrdersPanel = memo(function OrdersPanel({ orders, onCancel, onModif
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-foreground">订单</h2>
-        <div className="text-xs text-muted-foreground">{orders.length} 笔</div>
+        <h2 className="text-sm font-semibold text-foreground">{t.activeOrders}</h2>
+        <div className="text-xs text-muted-foreground">{orders.length} {t.items}</div>
       </div>
       {error ? <div className="mt-2 text-xs text-destructive">{error}</div> : null}
 
       <div className="mt-3 space-y-2">
-        {orders.length === 0 ? <div className="text-sm text-muted-foreground">暂无订单</div> : null}
+        {orders.length === 0 ? <div className="text-sm text-muted-foreground">{t.noActiveOrders}</div> : null}
 
         {orders.map((o) => {
           const pending = o.status === "pending";
           const busy = busyId === o.orderId;
           const editing = editingId === o.orderId;
+
+          const sideLabel = o.side === "buy" ? t.buy : t.sell;
+          const productLabel = t.productType[o.productType as keyof typeof t.productType] ?? o.productType;
+          const statusLabel =
+            o.status === "filled"
+              ? t.status.filled
+              : o.status === "pending"
+                ? t.status.pending
+                : o.status === "canceled"
+                  ? t.status.canceled
+                  : t.status.rejected;
+          const orderTypeLabel = o.orderType === "market" ? t.ticket.market : `${t.ticket.limit} ${o.limitPrice}`;
 
           return (
             <div
@@ -83,10 +97,10 @@ export const OrdersPanel = memo(function OrdersPanel({ orders, onCancel, onModif
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="font-medium">
-                    {o.side} {o.quantity} {o.productType} {o.symbol}
+                    {sideLabel} {o.quantity} {productLabel} {o.symbol}
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    {o.orderType === "market" ? "market" : `limit ${o.limitPrice}`} · {o.currency} · 状态 {o.status}
+                    {orderTypeLabel} · {o.currency} · {statusLabel}
                   </div>
                 </div>
 
@@ -97,14 +111,14 @@ export const OrdersPanel = memo(function OrdersPanel({ orders, onCancel, onModif
                       onClick={() => doCancel(o.orderId)}
                       disabled={busy}
                     >
-                      取消
+                      {t.cancel}
                     </button>
                     <button
                       className="h-8 rounded-md border border-border bg-transparent px-3 text-xs font-medium text-foreground disabled:opacity-50 hover:bg-accent"
                       onClick={() => startEdit(o.orderId)}
                       disabled={busy}
                     >
-                      改单
+                      {t.modify}
                     </button>
                   </div>
                 ) : null}
@@ -112,7 +126,7 @@ export const OrdersPanel = memo(function OrdersPanel({ orders, onCancel, onModif
 
               {o.status === "filled" && o.fillPrice !== undefined ? (
                 <div className="mt-2 text-xs text-muted-foreground">
-                  成交价 {o.fillPrice} · 成交额 {o.fillValue}
+                  {t.fillPrice} {o.fillPrice} · {t.fillValue} {o.fillValue}
                 </div>
               ) : null}
 
@@ -123,7 +137,7 @@ export const OrdersPanel = memo(function OrdersPanel({ orders, onCancel, onModif
                     value={q}
                     onChange={(e) => setQ(e.target.value)}
                     inputMode="decimal"
-                    placeholder="数量"
+                    placeholder={t.ticket.quantity}
                     disabled={busy}
                   />
                   <input
@@ -131,7 +145,7 @@ export const OrdersPanel = memo(function OrdersPanel({ orders, onCancel, onModif
                     value={limit}
                     onChange={(e) => setLimit(e.target.value)}
                     inputMode="decimal"
-                    placeholder={o.orderType === "limit" ? "限价" : "市价单不可改价"}
+                    placeholder={o.orderType === "limit" ? t.ticket.limit : t.marketNoEditPrice}
                     disabled={busy || o.orderType !== "limit"}
                   />
 
@@ -140,7 +154,7 @@ export const OrdersPanel = memo(function OrdersPanel({ orders, onCancel, onModif
                     onClick={() => doModify(o.orderId)}
                     disabled={busy}
                   >
-                    {busy ? "处理中…" : "提交改单"}
+                    {busy ? t.processing : t.submitModify}
                   </button>
 
                   <button
@@ -148,7 +162,7 @@ export const OrdersPanel = memo(function OrdersPanel({ orders, onCancel, onModif
                     onClick={() => setEditingId(null)}
                     disabled={busy}
                   >
-                    取消编辑
+                    {t.cancelEdit}
                   </button>
                 </div>
               ) : null}

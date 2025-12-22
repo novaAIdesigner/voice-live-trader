@@ -5,22 +5,9 @@ import { ChatPanel, type ChatMessage } from "@/components/ChatPanel";
 import { ConnectionPanel } from "@/components/ConnectionPanel";
 import { AccountPanel } from "@/components/AccountPanel";
 import { AssetsPanel } from "@/components/AssetsPanel";
-import { PRODUCT_LABEL, TradeForm, defaultOrder } from "@/components/TradeForm";
+import { TradeForm, defaultOrder } from "@/components/TradeForm";
 import { UsagePanel } from "@/components/UsagePanel";
-import {
-  cancelOrderTool,
-  convertCurrencyTool,
-  getMarketPriceTool,
-  getAccountSnapshotTool,
-  modifyOrderTool,
-  placeBondOrderTool,
-  placeCryptoOrderTool,
-  placeFundOrderTool,
-  placeOptionOrderTool,
-  placeStockOrderTool,
-  traderInstructionsZh,
-  updateOrderFormTool,
-} from "@/lib/traderAgent";
+import { buildTradingTools, getTraderInstructions } from "@/lib/traderAgent";
 import type {
   AccountSnapshot,
   AssetPosition,
@@ -49,6 +36,7 @@ import { TicketCard } from "@/components/TicketCard";
 import { TradeTicket } from "@/lib/trade/ticket";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useFlashOnChange } from "@/lib/hooks";
+import { useLanguage } from "@/lib/i18n";
 
 function canSubmitOrder(order: TradeOrderRequest, disabled?: boolean) {
   if (disabled) return false;
@@ -65,11 +53,14 @@ const defaultConfig: VoiceLiveConnectionConfig = {
   apiVersion: "2025-10-01",
   model: "gpt-4o",
   apiKey: "",
-  voice: { type: "azure-standard", name: "zh-CN-XiaochenMultilingualNeural" },
-  instructions: traderInstructionsZh,
+  voice: { type: "azure-standard", name: "zh-CN-XiaochenMultilingualNeural", temperature: 0.8 },
+  instructions: getTraderInstructions("en"),
   languageHint: "zh,en",
   enableAudioLogging: true,
   enableBargeIn: true,
+  vadThreshold: 0.5,
+  vadPrefixPaddingMs: 300,
+  vadSilenceDurationMs: 200,
 };
 
 const ENDPOINT_COOKIE = "vl_endpoint_host";
@@ -96,6 +87,29 @@ function chatTs() {
 
 function isGitHubPagesRuntime() {
   return typeof window !== "undefined" && window.location.hostname.endsWith("github.io");
+}
+
+function formatTradeSummary(tn: any, trade: TradeOrderResponse): string {
+  const order = trade.order;
+  const sideLabel = order.side === "buy" ? tn.buy : tn.sell;
+  const productLabel = (tn.productType && tn.productType[order.productType]) || order.productType;
+  const orderTypeLabel = order.orderType === "market" ? tn.market : tn.limit;
+  const statusLabel = (tn.status && tn.status[trade.status]) || trade.status;
+
+  const qtyText = typeof order.quantity === "number" ? String(order.quantity) : "";
+  const currencyText = order.currency ?? "";
+
+  if (trade.status === "filled" && typeof trade.fillPrice === "number" && Number.isFinite(trade.fillPrice)) {
+    const px = trade.fillPrice.toFixed(4).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+    return `${statusLabel} (${orderTypeLabel}): ${sideLabel} ${qtyText} ${productLabel} ${order.symbol} @ ${px} ${currencyText}`.trim();
+  }
+
+  if (order.orderType === "limit" && typeof order.limitPrice === "number" && Number.isFinite(order.limitPrice)) {
+    const px = order.limitPrice.toFixed(4).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+    return `${statusLabel} (${orderTypeLabel}): ${sideLabel} ${qtyText} ${productLabel} ${order.symbol} @ ${px} ${currencyText}`.trim();
+  }
+
+  return `${statusLabel} (${orderTypeLabel}): ${sideLabel} ${qtyText} ${productLabel} ${order.symbol} ${currencyText}`.trim();
 }
 
 async function postTrade(order: TradeOrderRequest): Promise<TradeOrderResponse> {
@@ -129,6 +143,7 @@ async function postModify(orderId: string, patch: ModifyOrderRequest) {
 }
 
 export default function Home() {
+  const { t: i18n, lang, setLang } = useLanguage();
   const clientRef = useRef<VoiceLiveClient | null>(null);
 
   const [config, setConfig] = useState<VoiceLiveConnectionConfig>(defaultConfig);
@@ -177,6 +192,11 @@ export default function Home() {
   const ticketsRef = useRef(tickets);
   useEffect(() => { ticketsRef.current = tickets; }, [tickets]);
 
+  const i18nRef = useRef(i18n);
+  const langRef = useRef(lang);
+  useEffect(() => { i18nRef.current = i18n; }, [i18n]);
+  useEffect(() => { langRef.current = lang; }, [lang]);
+
   const configRef = useRef(config);
   useEffect(() => { configRef.current = config; }, [config]);
 
@@ -204,13 +224,15 @@ export default function Home() {
           if (rec.status === prevStatus) return t;
 
           changedIds.push(t.id);
+          const tn = i18nRef.current;
+          const sideLabel = rec.side === "buy" ? tn.buy : tn.sell;
           const summary =
             rec.status === "filled"
-              ? `订单 ${rec.orderId} 已成交：${rec.side === "buy" ? "买入" : "卖出"} ${rec.quantity} ${rec.symbol}`
+              ? `${tn.order} ${rec.orderId} ${tn.status.filled}: ${sideLabel} ${rec.quantity} ${rec.symbol}`
               : rec.status === "canceled"
-                ? `订单 ${rec.orderId} 已取消：${rec.side === "buy" ? "买入" : "卖出"} ${rec.quantity} ${rec.symbol}`
+                ? `${tn.order} ${rec.orderId} ${tn.status.canceled}: ${sideLabel} ${rec.quantity} ${rec.symbol}`
                 : rec.status === "rejected"
-                  ? `订单 ${rec.orderId} 已拒绝：${rec.side === "buy" ? "买入" : "卖出"} ${rec.quantity} ${rec.symbol}`
+                  ? `${tn.order} ${rec.orderId} ${tn.status.rejected}: ${sideLabel} ${rec.quantity} ${rec.symbol}`
                   : last.summary;
 
           return {
@@ -283,41 +305,35 @@ export default function Home() {
     if (connectDisabled) return;
     setChatError(null);
 
-    const config = configRef.current;
-    logSystem(`连接中：${config.resourceHost} / ${config.model}`);
+    const config = {
+      ...configRef.current,
+      instructions: getTraderInstructions(langRef.current),
+    };
+    logSystem(`${i18nRef.current.logs.connecting} ${config.resourceHost} / ${config.model}`);
 
     const client = new VoiceLiveClient({
-      tools: [
-        updateOrderFormTool,
-        placeStockOrderTool,
-        placeFundOrderTool,
-        placeBondOrderTool,
-        placeOptionOrderTool,
-        placeCryptoOrderTool,
-        getAccountSnapshotTool,
-        getMarketPriceTool,
-        convertCurrencyTool,
-        cancelOrderTool,
-        modifyOrderTool,
-      ],
+      tools: buildTradingTools(langRef.current),
       functionHandler: async ({ name, callId, argumentsJson }) => {
-        logSystem(`🔧 tool 调用：${name} (call_id=${callId})`);
-        logSystem(`↳ args: ${argumentsJson}`);
+        const toolDisplayName = i18nRef.current.tools.names[name as keyof typeof i18nRef.current.tools.names] ?? name;
+        const te = i18nRef.current.tools.errors;
+
+        logSystem(`${i18nRef.current.logs.toolInvokePrefix} ${toolDisplayName} (call_id=${callId})`);
+        logSystem(`${i18nRef.current.logs.argsPrefix} ${argumentsJson}`);
 
         if (name === "update_order_form") {
           let argsUnknown: unknown;
           try {
             argsUnknown = JSON.parse(argumentsJson);
           } catch {
-            const output = JSON.stringify({ ok: false, error: "Invalid JSON arguments" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ ok: false, error: te.invalidJsonArguments });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
 
           const r = argsUnknown && typeof argsUnknown === "object" ? (argsUnknown as Record<string, unknown>) : null;
           if (!r) {
-            const output = JSON.stringify({ ok: false, error: "Invalid arguments shape" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ ok: false, error: te.invalidArgumentsShape });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
 
@@ -404,7 +420,7 @@ export default function Home() {
           });
 
           const output = JSON.stringify({ ok: true, ticketId: chosenTicketId, created });
-          logSystem(`↳ output: ${output}`);
+          logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
           return { output };
         }
 
@@ -413,11 +429,11 @@ export default function Home() {
             const snap = await fetchAccount();
             setAccount(snap);
             const output = JSON.stringify(snap);
-            logSystem(`↳ output: ${output}`);
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           } catch (e) {
             const output = JSON.stringify({ error: e instanceof Error ? e.message : String(e) });
-            logSystem(`↳ output: ${output}`);
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
         }
@@ -427,8 +443,8 @@ export default function Home() {
           try {
             argsUnknown = JSON.parse(argumentsJson);
           } catch {
-            const output = JSON.stringify({ error: "Invalid JSON arguments" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ error: te.invalidJsonArguments });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
 
@@ -442,20 +458,20 @@ export default function Home() {
           const isFiat = (v: unknown) => v === "USD" || v === "JPY" || v === "CNY";
 
           if (!isProductType(productType)) {
-            const output = JSON.stringify({ error: "productType must be stock|fund|bond|option|crypto" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ error: te.productTypeInvalid });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
 
           if (!symbol.trim()) {
-            const output = JSON.stringify({ error: "symbol is required" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ error: te.symbolRequired });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
 
           if (currency !== undefined && !isFiat(currency)) {
-            const output = JSON.stringify({ error: "currency must be USD|JPY|CNY" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ error: te.currencyInvalid });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
 
@@ -466,7 +482,7 @@ export default function Home() {
           });
 
           const output = JSON.stringify(res);
-          logSystem(`↳ output: ${output}`);
+          logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
           return { output };
         }
 
@@ -475,8 +491,8 @@ export default function Home() {
           try {
             argsUnknown = JSON.parse(argumentsJson);
           } catch {
-            const output = JSON.stringify({ error: "Invalid JSON arguments" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ error: te.invalidJsonArguments });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
 
@@ -488,14 +504,14 @@ export default function Home() {
           const isFiat = (v: unknown) => v === "USD" || v === "JPY" || v === "CNY";
 
           if (!isFiat(from) || !isFiat(to)) {
-            const output = JSON.stringify({ error: "from/to must be USD|JPY|CNY" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ error: te.fromToInvalid });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
 
           if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
-            const output = JSON.stringify({ error: "amount must be a number > 0" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ error: te.amountInvalid });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
 
@@ -503,11 +519,11 @@ export default function Home() {
             const res = await postFxConvert({ from, to, amount });
             if (res.snapshot) setAccount(res.snapshot);
             const output = JSON.stringify(res);
-            logSystem(`↳ output: ${output}`);
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           } catch (e) {
             const output = JSON.stringify({ error: e instanceof Error ? e.message : String(e) });
-            logSystem(`↳ output: ${output}`);
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
         }
@@ -517,15 +533,15 @@ export default function Home() {
           try {
             argsUnknown = JSON.parse(argumentsJson);
           } catch {
-            const output = JSON.stringify({ error: "Invalid JSON arguments" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ error: te.invalidJsonArguments });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
           const r = argsUnknown && typeof argsUnknown === "object" ? (argsUnknown as Record<string, unknown>) : null;
           const orderId = typeof r?.orderId === "string" ? r.orderId : "";
           if (!orderId) {
-            const output = JSON.stringify({ error: "orderId is required" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ error: te.orderIdRequired });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
           try {
@@ -533,11 +549,11 @@ export default function Home() {
             if (res.snapshot) setAccount(res.snapshot);
             else setAccount(await fetchAccount());
             const output = JSON.stringify(res);
-            logSystem(`↳ output: ${output}`);
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           } catch (e) {
             const output = JSON.stringify({ error: e instanceof Error ? e.message : String(e) });
-            logSystem(`↳ output: ${output}`);
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
         }
@@ -547,16 +563,16 @@ export default function Home() {
           try {
             argsUnknown = JSON.parse(argumentsJson);
           } catch {
-            const output = JSON.stringify({ error: "Invalid JSON arguments" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ error: te.invalidJsonArguments });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
 
           const r = argsUnknown && typeof argsUnknown === "object" ? (argsUnknown as Record<string, unknown>) : null;
           const orderId = typeof r?.orderId === "string" ? r.orderId : "";
           if (!orderId) {
-            const output = JSON.stringify({ error: "orderId is required" });
-            logSystem(`↳ output: ${output}`);
+            const output = JSON.stringify({ error: te.orderIdRequired });
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
 
@@ -571,11 +587,11 @@ export default function Home() {
             if (res.snapshot) setAccount(res.snapshot);
             else setAccount(await fetchAccount());
             const output = JSON.stringify(res);
-            logSystem(`↳ output: ${output}`);
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           } catch (e) {
             const output = JSON.stringify({ error: e instanceof Error ? e.message : String(e) });
-            logSystem(`↳ output: ${output}`);
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
             return { output };
           }
         }
@@ -590,8 +606,8 @@ export default function Home() {
 
         const productType = productTypeByTool[name];
         if (!productType) {
-          const output = JSON.stringify({ error: `Unknown tool: ${name}`, callId });
-          logSystem(`↳ output: ${output}`);
+          const output = JSON.stringify({ error: `${te.unknownToolPrefix} ${name}`, callId });
+          logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
           return { output };
         }
 
@@ -599,14 +615,14 @@ export default function Home() {
         try {
           argsUnknown = JSON.parse(argumentsJson);
         } catch {
-          const output = JSON.stringify({ error: "Invalid JSON arguments" });
-          logSystem(`↳ output: ${output}`);
+          const output = JSON.stringify({ error: te.invalidJsonArguments });
+          logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
           return { output };
         }
 
         if (!argsUnknown || typeof argsUnknown !== "object") {
-          const output = JSON.stringify({ error: "Invalid arguments shape" });
-          logSystem(`↳ output: ${output}`);
+          const output = JSON.stringify({ error: te.invalidArgumentsShape });
+          logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
           return { output };
         }
 
@@ -639,15 +655,16 @@ export default function Home() {
 
         try {
           const trade = await postTrade(order);
-          const output = JSON.stringify(trade);
-          logSystem(`↳ output: ${output}`);
+          const localizedTrade: TradeOrderResponse = { ...trade, summary: formatTradeSummary(i18nRef.current, trade) };
+          const output = JSON.stringify(localizedTrade);
+          logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
           setTickets((prev) => [
             {
               id: newId("ticket"),
               order,
               frozen: true,
               collapsed: true,
-              lastResponse: trade,
+              lastResponse: localizedTrade,
             },
             ...prev.filter((t) => t.frozen),
           ]);
@@ -661,28 +678,28 @@ export default function Home() {
           return { output };
         } catch (e) {
           const output = JSON.stringify({ error: e instanceof Error ? e.message : String(e) });
-          logSystem(`↳ output: ${output}`);
+            logSystem(`${i18nRef.current.logs.outputPrefix} ${output}`);
           return { output };
         }
       },
       callbacks: {
         onStatus: (s) => {
           setStatus(s);
-          if (s === "connected") logSystem("✅ 已连接");
-          if (s === "disconnected") logSystem("⛔ 已断开");
+          if (s === "connected") logSystem(i18nRef.current.logs.connected);
+          if (s === "disconnected") logSystem(i18nRef.current.logs.disconnected);
         },
         onError: (m) => {
           setChatError(m);
-          logSystem(`❌ 错误：${m}`);
+          logSystem(`${i18nRef.current.logs.errorPrefix} ${m}`);
         },
         onServerEvent: (event) => {
           if (configRef.current.enableAudioLogging) {
             const t = event.type;
             if (t === "input_audio_buffer.speech_started" || t === "input_audio_buffer_speech_started") {
-              logSystem("🎤 speech_started（barge-in）");
+              logSystem(i18nRef.current.logs.speechStarted);
             }
             if (t === "input_audio_buffer.speech_stopped" || t === "input_audio_buffer_speech_stopped") {
-              logSystem("🎤 speech_stopped");
+              logSystem(i18nRef.current.logs.speechStopped);
             }
 
             // Throttled byte logging to avoid spamming.
@@ -697,7 +714,7 @@ export default function Home() {
                 audioLogRef.current.lastAudioIn = inBytes;
                 audioLogRef.current.lastAudioOut = outBytes;
                 if (inDelta > 0 || outDelta > 0) {
-                  logSystem(`🎧 audio bytes (+in ${inDelta}, +out ${outDelta})`);
+                  logSystem(`${i18nRef.current.logs.audioBytes} (+in ${inDelta}, +out ${outDelta})`);
                 }
               }
             }
@@ -712,7 +729,10 @@ export default function Home() {
               if (ir.type === "function_call") {
                 const name = typeof ir.name === "string" ? ir.name : "function_call";
                 const callId = typeof ir.call_id === "string" ? ir.call_id : "";
-                logSystem(`🧩 模型请求工具：${name}${callId ? ` (call_id=${callId})` : ""}`);
+                const toolDisplayName = i18nRef.current.tools.names[name as keyof typeof i18nRef.current.tools.names] ?? name;
+                logSystem(
+                  `${i18nRef.current.logs.modelRequestedToolPrefix} ${toolDisplayName}${callId ? ` (call_id=${callId})` : ""}`,
+                );
               }
             }
           }
@@ -721,8 +741,12 @@ export default function Home() {
             const name = typeof r.name === "string" ? r.name : undefined;
             const callId = typeof r.call_id === "string" ? r.call_id : undefined;
             const args = typeof r.arguments === "string" ? r.arguments : undefined;
-            logSystem(`🧩 工具参数就绪：${name ?? ""}${callId ? ` (call_id=${callId})` : ""}`.trim());
-            if (args) logSystem(`↳ args: ${args}`);
+            const toolDisplayName =
+              (name && (i18nRef.current.tools.names[name as keyof typeof i18nRef.current.tools.names] ?? name)) || "";
+            logSystem(
+              `${i18nRef.current.logs.toolArgsReadyPrefix} ${toolDisplayName}${callId ? ` (call_id=${callId})` : ""}`.trim(),
+            );
+            if (args) logSystem(`${i18nRef.current.logs.argsPrefix} ${args}`);
           }
         },
         onStats: ({ usage: u, wire: w }) => {
@@ -730,6 +754,9 @@ export default function Home() {
           setWire(w);
         },
         onUserTranscript: (text) => {
+          // Follow the user's input language for the whole UI.
+          if (/[\u4E00-\u9FFF]/.test(text)) setLang("zh");
+          else if (/[A-Za-z]/.test(text)) setLang("en");
           setMessages((prev) => [...prev, { id: newId("u"), role: "user", text, ts: chatTs() }]);
         },
         onAssistantTextDelta: (delta) => {
@@ -757,7 +784,7 @@ export default function Home() {
       setAssistantStreaming("");
       setAssistantStreamingTs(null);
       setStatus("disconnected");
-      logSystem("⛔ 已断开");
+      logSystem(i18nRef.current.logs.disconnected);
     }
   }, []);
 
@@ -811,7 +838,7 @@ export default function Home() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setChatError(msg);
-      logSystem(`❌ 下单失败：${msg}`);
+      logSystem(`${i18nRef.current.logs.tradeFailedPrefix} ${msg}`);
     }
   }, []);
 
@@ -863,8 +890,7 @@ export default function Home() {
               alt="Azure AI"
               width={120}
               height={28}
-              className="h-7 w-auto"
-              style={{ width: "auto" }}
+              style={{ height: "20px", width: "auto" }}
               priority
             />
             <div className="min-w-0">
@@ -911,12 +937,12 @@ export default function Home() {
         <div className="grid gap-4 lg:h-[calc(100vh-140px)] lg:grid-rows-[1fr_auto_auto]">
           <section className="min-h-0 overflow-auto rounded-lg border border-border bg-card p-4">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold text-foreground">交易窗口</h2>
+              <h2 className="text-sm font-semibold text-foreground">{i18n.tradeWindowTitle}</h2>
               <button
                 className="h-9 rounded-md border border-border bg-transparent px-3 text-xs font-medium text-foreground hover:bg-black/5 dark:hover:bg-white/5"
                 onClick={handleCreateTicket}
               >
-                新建订单
+                {i18n.createOrder}
               </button>
             </div>
 

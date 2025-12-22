@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, memo } from "react";
+import { useLanguage } from "@/lib/i18n";
 
 export type ChatMessage = {
   id: string;
@@ -15,24 +16,25 @@ type Props = {
   fill?: boolean;
 };
 
-function roleLabel(role: ChatMessage["role"]) {
-  if (role === "user") return "用户";
-  if (role === "assistant") return "Agent";
-  return "系统";
-}
-
-function rolePillClass(role: ChatMessage["role"]) {
-  if (role === "assistant") return "bg-emerald-500/20 text-emerald-400";
-  if (role === "user") return "bg-sky-500/20 text-sky-400";
-  return "bg-muted text-muted-foreground";
-}
-
 export const ChatPanel = memo(function ChatPanel({ messages, error, fill }: Props) {
   const endRef = useRef<HTMLDivElement | null>(null);
+  const { t } = useLanguage();
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length]);
+
+  function roleLabel(role: ChatMessage["role"]) {
+    if (role === "user") return t.user;
+    if (role === "assistant") return t.assistant;
+    return t.system;
+  }
+
+  function rolePillClass(role: ChatMessage["role"]) {
+    if (role === "assistant") return "bg-emerald-500/20 text-emerald-400";
+    if (role === "user") return "bg-sky-500/20 text-sky-400";
+    return "bg-muted text-muted-foreground";
+  }
 
   return (
     <section
@@ -41,7 +43,7 @@ export const ChatPanel = memo(function ChatPanel({ messages, error, fill }: Prop
       }`}
     >
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-foreground">Chat</h2>
+        <h2 className="text-sm font-semibold text-foreground">{t.chatHistory}</h2>
         {error ? <div className="text-xs text-red-600">{error}</div> : null}
       </div>
 
@@ -50,7 +52,7 @@ export const ChatPanel = memo(function ChatPanel({ messages, error, fill }: Prop
           fill ? " min-h-0 flex-1" : " h-[220px]"
         }`}
       >
-        {messages.length === 0 ? <div className="text-sm text-zinc-500">暂无消息</div> : null}
+        {messages.length === 0 ? <div className="text-sm text-zinc-500">{t.noTrades}</div> : null}
 
         <div className="space-y-1">
           {messages.map((m) => (

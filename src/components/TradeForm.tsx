@@ -3,6 +3,7 @@
 import type { CurrencyCode, TradeOrderRequest, TradeProductType } from "@/lib/trade/types";
 import { useFlashOnChange } from "@/lib/hooks";
 import { memo } from "react";
+import { useLanguage } from "@/lib/i18n";
 
 type Props = {
   order: TradeOrderRequest;
@@ -20,17 +21,10 @@ export const defaultOrder: TradeOrderRequest = {
   timeInForce: "day",
 };
 
-export const PRODUCT_LABEL: Record<TradeProductType, string> = {
-  stock: "股票",
-  bond: "债券",
-  fund: "基金",
-  option: "期权",
-  crypto: "数字货币",
-};
-
 const CURRENCIES: CurrencyCode[] = ["USD", "JPY", "CNY"];
 
 export const TradeForm = memo(function TradeForm({ order, onOrderChange, disabled }: Props) {
+  const { t } = useLanguage();
   const limitNeeded = order.orderType === "limit";
 
   const flashSide = useFlashOnChange(order.side);
@@ -52,7 +46,7 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
   return (
     <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-500">方向</span>
+          <span className="text-xs text-zinc-500">{t.ticket.side}</span>
           <select
             className={
               "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
@@ -62,13 +56,13 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
             disabled={!!disabled}
             onChange={(e) => onOrderChange({ ...order, side: e.target.value as TradeOrderRequest["side"] })}
           >
-            <option value="buy">买入</option>
-            <option value="sell">卖出</option>
+            <option value="buy">{t.buy}</option>
+            <option value="sell">{t.sell}</option>
           </select>
         </label>
 
         <label className="md:col-span-2 grid gap-1">
-          <span className="text-xs text-zinc-500">标的（代码/名称）</span>
+          <span className="text-xs text-zinc-500">{t.ticket.symbol}</span>
           <input
             className={
               "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
@@ -77,14 +71,14 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
             value={order.symbol}
             disabled={!!disabled}
             onChange={(e) => onOrderChange({ ...order, symbol: e.target.value })}
-            placeholder="例如 600519 / AAPL / BTC"
+            placeholder={t.ticket.placeholders.symbol}
           />
         </label>
 
         {order.productType === "option" ? (
           <>
             <label className="grid gap-1">
-              <span className="text-xs text-zinc-500">期权类型</span>
+              <span className="text-xs text-zinc-500">{t.ticket.optionType}</span>
               <select
                 className={
                   "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
@@ -100,7 +94,7 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
             </label>
 
             <label className="grid gap-1">
-              <span className="text-xs text-zinc-500">行权价</span>
+              <span className="text-xs text-zinc-500">{t.ticket.strike}</span>
               <input
                 className={
                   "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
@@ -112,12 +106,12 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
                   onOrderChange({ ...order, strike: e.target.value === "" ? undefined : Number(e.target.value) })
                 }
                 inputMode="decimal"
-                placeholder="例如 200"
+                placeholder={t.ticket.placeholders.strike}
               />
             </label>
 
             <label className="md:col-span-3 grid gap-1">
-              <span className="text-xs text-zinc-500">到期日（可选）</span>
+              <span className="text-xs text-zinc-500">{t.ticket.expiry}</span>
               <input
                 className={
                   "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
@@ -126,7 +120,7 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
                 value={order.expiry ?? ""}
                 disabled={!!disabled}
                 onChange={(e) => onOrderChange({ ...order, expiry: e.target.value || undefined })}
-                placeholder="例如 2026-03-27"
+                placeholder={t.ticket.placeholders.expiry}
               />
             </label>
           </>
@@ -134,7 +128,7 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
 
         {order.productType === "bond" ? (
           <label className="md:col-span-3 grid gap-1">
-            <span className="text-xs text-zinc-500">到期日（可选）</span>
+            <span className="text-xs text-zinc-500">{t.ticket.maturity}</span>
             <input
               className={
                 "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
@@ -143,13 +137,13 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
               value={order.maturity ?? ""}
               disabled={!!disabled}
               onChange={(e) => onOrderChange({ ...order, maturity: e.target.value || undefined })}
-              placeholder="例如 2030-06-30"
+              placeholder={t.ticket.placeholders.maturity}
             />
           </label>
         ) : null}
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-500">数量</span>
+          <span className="text-xs text-zinc-500">{t.ticket.quantity}</span>
           <input
             className={
               "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
@@ -164,7 +158,7 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
         </label>
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-500">订单类型</span>
+          <span className="text-xs text-zinc-500">{t.ticket.orderType}</span>
           <select
             className={
               "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
@@ -174,13 +168,13 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
             disabled={!!disabled}
             onChange={(e) => onOrderChange({ ...order, orderType: e.target.value as TradeOrderRequest["orderType"] })}
           >
-            <option value="market">市价</option>
-            <option value="limit">限价</option>
+            <option value="market">{t.ticket.market}</option>
+            <option value="limit">{t.ticket.limit}</option>
           </select>
         </label>
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-500">限价（限价单必填）</span>
+          <span className="text-xs text-zinc-500">{t.ticket.limitPrice}</span>
           <input
             className={
               "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none disabled:opacity-50" +
@@ -190,12 +184,12 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
             onChange={(e) => onOrderChange({ ...order, limitPrice: e.target.value === "" ? undefined : Number(e.target.value) })}
             inputMode="decimal"
             disabled={!!disabled || !limitNeeded}
-            placeholder={limitNeeded ? "例如 123.45" : "-"}
+            placeholder={limitNeeded ? t.ticket.placeholders.limitPrice : "-"}
           />
         </label>
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-500">币种</span>
+          <span className="text-xs text-zinc-500">{t.ticket.currency}</span>
           <select
             className={
               "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none disabled:opacity-50" +
@@ -214,7 +208,7 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
         </label>
 
         <label className="grid gap-1">
-          <span className="text-xs text-zinc-500">有效期（可选）</span>
+          <span className="text-xs text-zinc-500">{t.ticket.timeInForce}</span>
           <select
             className={
               "h-9 rounded-md border border-border bg-transparent px-3 text-sm text-foreground outline-none" +
@@ -224,7 +218,7 @@ export const TradeForm = memo(function TradeForm({ order, onOrderChange, disable
             disabled={!!disabled}
             onChange={(e) => onOrderChange({ ...order, timeInForce: e.target.value as TradeOrderRequest["timeInForce"] })}
           >
-            <option value="day">当日有效</option>
+            <option value="day">{t.ticket.day}</option>
             <option value="gtc">GTC</option>
           </select>
         </label>

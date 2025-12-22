@@ -3,6 +3,7 @@
 import type { AccountBalance, CurrencyCode, FxConvertRequest, FxConvertResponse } from "@/lib/trade/types";
 import { useMemo, useState, memo } from "react";
 import { useFlashOnChange } from "@/lib/hooks";
+import { useLanguage } from "@/lib/i18n";
 
 type Props = {
   balances: AccountBalance[];
@@ -15,6 +16,7 @@ const CONVERT_CCYS: CurrencyCode[] = ["USD", "JPY", "CNY"];
 
 function BalanceCard({ ccy, balance }: { ccy: CurrencyCode; balance?: AccountBalance }) {
   const flash = useFlashOnChange(balance?.available);
+  const { t } = useLanguage();
   const h = "flash-3s";
 
   return (
@@ -28,13 +30,14 @@ function BalanceCard({ ccy, balance }: { ccy: CurrencyCode; balance?: AccountBal
         {balance ? balance.available.toLocaleString() : "0"}
       </div>
       <div className="mt-1 text-[11px] text-zinc-500">
-        预留：{balance ? balance.reserved.toLocaleString() : "0"}
+        {t.reserved}{balance ? balance.reserved.toLocaleString() : "0"}
       </div>
     </div>
   );
 }
 
 export const AccountPanel = memo(function AccountPanel({ balances, onConvert, onAdjust }: Props) {
+  const { t } = useLanguage();
   const [from, setFrom] = useState<CurrencyCode>("USD");
   const [to, setTo] = useState<CurrencyCode>("CNY");
   const [amount, setAmount] = useState<string>("100");
@@ -56,18 +59,18 @@ export const AccountPanel = memo(function AccountPanel({ balances, onConvert, on
     setError(null);
     const n = Number(amount);
     if (!Number.isFinite(n) || n <= 0) {
-      setError("金额必须 > 0");
+      setError(t.amountPositive);
       return;
     }
     if (from === to) {
-      setError("from/to 不能相同");
+      setError(t.sameCurrency);
       return;
     }
 
     setBusy(true);
     try {
       const res = await onConvert({ from, to, amount: n });
-      if (!res.ok) setError(res.error ?? "换汇失败");
+      if (!res.ok) setError(res.error ?? t.exchangeFailed);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -77,13 +80,13 @@ export const AccountPanel = memo(function AccountPanel({ balances, onConvert, on
 
   async function submitCash() {
     if (!onAdjust) {
-      setError("未配置出入金接口");
+      setError(t.noCashConfig);
       return;
     }
     setError(null);
     const n = Number(cashAmount);
     if (!Number.isFinite(n) || n <= 0) {
-      setError("金额必须 > 0");
+      setError(t.amountPositive);
       return;
     }
 
@@ -91,7 +94,7 @@ export const AccountPanel = memo(function AccountPanel({ balances, onConvert, on
     try {
       const amountSigned = cashMode === "deposit" ? n : -n;
       const res = await onAdjust({ currency: cashCcy, amount: amountSigned });
-      if (!res.ok) setError(res.error ?? "操作失败");
+      if (!res.ok) setError(res.error ?? t.opFailed);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -102,7 +105,7 @@ export const AccountPanel = memo(function AccountPanel({ balances, onConvert, on
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-foreground">账户余额</h2>
+        <h2 className="text-sm font-semibold text-foreground">{t.accountBalance}</h2>
         {error ? <div className="text-xs text-red-600">{error}</div> : null}
       </div>
 
@@ -112,10 +115,10 @@ export const AccountPanel = memo(function AccountPanel({ balances, onConvert, on
         ))}
       </div>
 
-      <div className="mt-3 grid gap-2">
+      <div className="mt-3 grid grid-cols-2 gap-2">
         <details className="rounded-md border border-border">
-          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-foreground hover:bg-accent">
-            换汇
+          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-foreground hover:bg-accent text-center">
+            {t.exchange}
           </summary>
           <div className="grid gap-2 border-t border-border p-3">
             <select
@@ -147,7 +150,7 @@ export const AccountPanel = memo(function AccountPanel({ balances, onConvert, on
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               inputMode="decimal"
-              placeholder="金额"
+              placeholder={t.amount}
               disabled={busy}
             />
             <button
@@ -155,14 +158,14 @@ export const AccountPanel = memo(function AccountPanel({ balances, onConvert, on
               onClick={submit}
               disabled={busy}
             >
-              {busy ? "处理中…" : "确认"}
+              {busy ? t.processing : t.confirm}
             </button>
           </div>
         </details>
 
         <details className="rounded-md border border-border">
-          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-foreground hover:bg-accent">
-            出入金（仅 USD/JPY/CNY）
+          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-foreground hover:bg-accent text-center">
+            {t.depositWithdraw}
           </summary>
           <div className="grid gap-2 border-t border-border p-3">
             <select
@@ -171,8 +174,8 @@ export const AccountPanel = memo(function AccountPanel({ balances, onConvert, on
               onChange={(e) => setCashMode(e.target.value as "deposit" | "withdraw")}
               disabled={busy}
             >
-              <option value="deposit">入金</option>
-              <option value="withdraw">出金</option>
+              <option value="deposit">{t.deposit}</option>
+              <option value="withdraw">{t.withdraw}</option>
             </select>
             <select
               className="h-9 rounded-md border border-border bg-transparent px-2 text-xs text-foreground outline-none"
@@ -191,7 +194,7 @@ export const AccountPanel = memo(function AccountPanel({ balances, onConvert, on
               value={cashAmount}
               onChange={(e) => setCashAmount(e.target.value)}
               inputMode="decimal"
-              placeholder="金额"
+              placeholder={t.amount}
               disabled={busy}
             />
             <button
@@ -199,7 +202,7 @@ export const AccountPanel = memo(function AccountPanel({ balances, onConvert, on
               onClick={submitCash}
               disabled={busy || !onAdjust}
             >
-              {busy ? "处理中…" : "确认"}
+              {busy ? t.processing : t.confirm}
             </button>
           </div>
         </details>
