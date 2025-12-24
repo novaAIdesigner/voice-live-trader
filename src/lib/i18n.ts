@@ -78,6 +78,12 @@ const translations = {
     tokens: "Tokens",
     latency: "延迟 (ms)",
     wire: "网络传输",
+    totalTokens: "总Tokens",
+    inputTokens: "输入",
+    outputTokens: "输出",
+    text: "文本",
+    audio: "音频",
+    cached: "缓存",
     
     // TicketCard
     ticket: {
@@ -254,6 +260,12 @@ const translations = {
     tokens: "Tokens",
     latency: "Latency (ms)",
     wire: "Network",
+    totalTokens: "Total Tokens",
+    inputTokens: "Input",
+    outputTokens: "Output",
+    text: "Text",
+    audio: "Audio",
+    cached: "Cached",
     
     // TicketCard
     ticket: {

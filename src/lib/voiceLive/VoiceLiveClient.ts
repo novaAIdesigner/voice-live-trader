@@ -82,6 +82,9 @@ export class VoiceLiveClient {
   private usage: UsageTotals = emptyUsage();
   private wire: WireStats = emptyWire();
   private currentAssistantText = "";
+  
+  private lastSpeechStoppedAt: number | null = null;
+  private latencySamples: number[] = [];
 
   // Track pending function calls to know their name when arguments are done.
   private pendingFunctionCallsById = new Map<string, { name: string; itemId: string }>();
@@ -158,12 +161,19 @@ export class VoiceLiveClient {
         },
         onInputAudioBufferSpeechStopped: async () => {
             this.userSpeaking = false;
+            this.lastSpeechStoppedAt = Date.now();
             this.callbacks.onServerEvent?.({ type: "input_audio_buffer.speech_stopped" } as any);
         },
         onResponseAudioDelta: async (event) => {
           if (event.delta) {
             // If the user is currently speaking and barge-in is enabled, suppress assistant audio.
             if (this.enableBargeIn && this.userSpeaking) return;
+
+            if (this.lastSpeechStoppedAt) {
+                const latency = Date.now() - this.lastSpeechStoppedAt;
+                this.lastSpeechStoppedAt = null;
+                this.updateLatencyStats(latency);
+            }
 
             // event.delta is Uint8Array in the SDK
             const chunk = { sampleRate: 24000, bytes: event.delta };
@@ -174,6 +184,11 @@ export class VoiceLiveClient {
         },
         onResponseTextDelta: async (event) => {
           if (event.delta) {
+            if (this.lastSpeechStoppedAt) {
+                const latency = Date.now() - this.lastSpeechStoppedAt;
+                this.lastSpeechStoppedAt = null;
+                this.updateLatencyStats(latency);
+            }
             this.currentAssistantText += event.delta;
             this.callbacks.onAssistantTextDelta?.(event.delta);
           }
@@ -241,12 +256,33 @@ export class VoiceLiveClient {
           }
         },
         onResponseDone: async (event) => {
-            if (event.response.usage) {
-                const u = event.response.usage;
-                this.usage.totalTokens = u.totalTokens;
-                this.usage.inputTokens = u.inputTokens;
-                this.usage.outputTokens = u.outputTokens;
-                // Map other usage fields if available
+            const response = (event as any).response;
+            if (response?.usage) {
+                const u = response.usage;
+                this.usage.turns++;
+                this.usage.totalTokens += u.totalTokens ?? u.total_tokens ?? 0;
+                this.usage.inputTokens += u.inputTokens ?? u.input_tokens ?? 0;
+                this.usage.outputTokens += u.outputTokens ?? u.output_tokens ?? 0;
+
+                const inputDetails = u.inputTokenDetails ?? u.input_token_details;
+                if (inputDetails) {
+                    this.usage.inputTextTokens += inputDetails.textTokens ?? inputDetails.text_tokens ?? 0;
+                    this.usage.inputAudioTokens += inputDetails.audioTokens ?? inputDetails.audio_tokens ?? 0;
+                    this.usage.inputCachedTokens += inputDetails.cachedTokens ?? inputDetails.cached_tokens ?? 0;
+                    
+                    const cachedDetails = inputDetails.cachedTokensDetails ?? inputDetails.cached_tokens_details;
+                    if (cachedDetails) {
+                         this.usage.inputTextCachedTokens += cachedDetails.textTokens ?? cachedDetails.text_tokens ?? 0;
+                         this.usage.inputAudioCachedTokens += cachedDetails.audioTokens ?? cachedDetails.audio_tokens ?? 0;
+                    }
+                }
+
+                const outputDetails = u.outputTokenDetails ?? u.output_token_details;
+                if (outputDetails) {
+                    this.usage.outputTextTokens += outputDetails.textTokens ?? outputDetails.text_tokens ?? 0;
+                    this.usage.outputAudioTokens += outputDetails.audioTokens ?? outputDetails.audio_tokens ?? 0;
+                }
+                
                 this.emitStats();
             }
         }
@@ -372,5 +408,24 @@ export class VoiceLiveClient {
 
   private emitStats() {
     this.callbacks.onStats?.({ usage: this.usage, wire: this.wire });
+  }
+
+  private updateLatencyStats(latency: number) {
+    this.latencySamples.push(latency);
+    this.usage.speechEndToFirstResponseCount = this.latencySamples.length;
+    
+    // Min
+    if (this.usage.speechEndToFirstResponseMsMin === 0 || latency < this.usage.speechEndToFirstResponseMsMin) {
+        this.usage.speechEndToFirstResponseMsMin = latency;
+    }
+
+    // Avg
+    const sum = this.latencySamples.reduce((a, b) => a + b, 0);
+    this.usage.speechEndToFirstResponseMsAvg = sum / this.latencySamples.length;
+
+    // P90
+    const sorted = [...this.latencySamples].sort((a, b) => a - b);
+    const p90Index = Math.ceil(sorted.length * 0.9) - 1;
+    this.usage.speechEndToFirstResponseMsP90 = sorted[p90Index];
   }
 }
