@@ -407,7 +407,7 @@ export class VoiceLiveClient {
   }
 
   private emitStats() {
-    this.callbacks.onStats?.({ usage: this.usage, wire: this.wire });
+    this.callbacks.onStats?.({ usage: { ...this.usage }, wire: { ...this.wire } });
   }
 
   private updateLatencyStats(latency: number) {
