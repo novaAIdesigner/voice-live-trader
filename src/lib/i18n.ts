@@ -752,16 +752,22 @@ const translations = {
 
 export function useLanguage() {
   const ctx = useContext(LanguageContext);
+  
+  // Backward-compatible fallback logic must be unconditional to satisfy rules of hooks
+  const [localLang, setLocalLang] = useState<Language>("en");
+  
+  useEffect(() => {
+    if (!ctx) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLocalLang(detectNavigatorLanguage());
+    }
+  }, [ctx]);
+
   if (ctx) {
     return { lang: ctx.lang, setLang: ctx.setLang, t: translations[ctx.lang] };
   }
 
-  // Backward-compatible fallback (in case a component is used outside the provider).
-  const [lang, setLang] = useState<Language>("en");
-  useEffect(() => {
-    setLang(detectNavigatorLanguage());
-  }, []);
-  return { lang, setLang, t: translations[lang] };
+  return { lang: localLang, setLang: setLocalLang, t: translations[localLang] };
 }
 
 export function LanguageProvider({ children, initialLang }: { children: ReactNode; initialLang?: Language }) {
@@ -769,6 +775,7 @@ export function LanguageProvider({ children, initialLang }: { children: ReactNod
 
   useEffect(() => {
     if (initialLang) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLang(detectNavigatorLanguage());
   }, [initialLang]);
 

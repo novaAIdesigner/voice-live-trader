@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { VoiceLiveClient as AzureVoiceLiveClient, VoiceLiveSession } from "@azure/ai-voicelive";
 import { AzureKeyCredential } from "@azure/core-auth";
 import { bytesToBase64, base64ToBytes } from "@/lib/base64";

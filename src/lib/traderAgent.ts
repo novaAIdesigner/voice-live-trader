@@ -1,6 +1,6 @@
 import type { VoiceLiveTool } from "@/lib/voiceLive/types";
 
-export type TraderLanguage = "zh" | "en";
+export type TraderLanguage = "zh" | "en" | "ja" | "ko";
 
 export const traderInstructionsEn = `You are a trading assistant.
 
@@ -51,7 +51,7 @@ function baseOrderParamsByLang(lang: TraderLanguage) {
     note: "Note (optional)",
   };
 
-  const d = lang === "en" ? en : zh;
+  const d = lang === "zh" ? zh : en;
   return {
     type: "object",
     additionalProperties: false,
@@ -73,7 +73,7 @@ const baseOrderParams = baseOrderParamsByLang("zh");
 
 export function buildTradingTools(lang: TraderLanguage): VoiceLiveTool[] {
   const baseOrderParams = baseOrderParamsByLang(lang);
-  const isEn = lang === "en";
+  const isEn = lang !== "zh";
 
   const getMarketPriceTool: VoiceLiveTool = {
     type: "function",
@@ -133,6 +133,7 @@ export function buildTradingTools(lang: TraderLanguage): VoiceLiveTool[] {
     parameters: {
       ...baseOrderParams,
       properties: {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ...(baseOrderParams as any).properties,
         quantity: {
           type: "number",
@@ -157,6 +158,7 @@ export function buildTradingTools(lang: TraderLanguage): VoiceLiveTool[] {
     parameters: {
       ...baseOrderParams,
       properties: {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ...(baseOrderParams as any).properties,
         optionType: { type: "string", enum: ["call", "put"], description: isEn ? "Option type (optional)" : "期权类型（可选）" },
         strike: { type: "number", description: isEn ? "Strike price (optional)" : "行权价（可选）" },

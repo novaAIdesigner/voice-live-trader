@@ -89,6 +89,7 @@ function isGitHubPagesRuntime() {
   return typeof window !== "undefined" && window.location.hostname.endsWith("github.io");
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function formatTradeSummary(tn: any, trade: TradeOrderResponse): string {
   const order = trade.order;
   const sideLabel = order.side === "buy" ? tn.buy : tn.sell;
